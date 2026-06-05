@@ -79,8 +79,10 @@ pub struct WorkflowRow {
     pub finished_at: Option<DateTime<Utc>>,
     /// Estimated total run duration (seconds), from the most recent success.
     pub eta_total_secs: Option<i64>,
-    /// First commit of the current consecutive-failure streak.
-    pub fail_since_sha: Option<String>,
+    /// Head commit SHA of the latest run (the commit that kicked it off).
+    pub head_sha: Option<String>,
+    /// Database id of the latest run, for re-runs.
+    pub run_id: u64,
     /// Last few run results, newest first.
     pub recent: Vec<Dot>,
 }

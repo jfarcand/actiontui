@@ -35,6 +35,10 @@ pub struct Cli {
     #[arg(short = 'x', long = "exclude", value_name = "PATTERN")]
     pub exclude: Vec<String>,
 
+    /// Fire a sample notification + sound and exit (to test the channel).
+    #[arg(long = "test-notify")]
+    pub test_notify: bool,
+
     /// Additional repos as positional args (owner/repo).
     #[arg(value_name = "OWNER/REPO")]
     pub repos: Vec<String>,

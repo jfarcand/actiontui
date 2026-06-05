@@ -7,6 +7,22 @@ use crate::state::Transition;
 const SOUND_FAILURE: &str = "Basso";
 const SOUND_RECOVERY: &str = "Glass";
 
+/// Fire a sample failure + recovery notification so the channel can be tested
+/// on demand (the `t` key in watch mode, or `--test-notify`).
+pub fn test(sound: bool) {
+    let demo = [
+        Transition::Failure {
+            repo: "actiontui/demo".into(),
+            workflow: "Sample workflow".into(),
+        },
+        Transition::Recovery {
+            repo: "actiontui/demo".into(),
+            workflow: "Sample workflow".into(),
+        },
+    ];
+    announce(&demo, "main", sound);
+}
+
 pub fn announce(transitions: &[Transition], branch: &str, sound: bool) {
     for t in transitions {
         match t {

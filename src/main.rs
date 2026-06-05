@@ -29,6 +29,14 @@ async fn main() -> Result<()> {
     paths.ensure()?;
 
     let file = FileConfig::load(&paths.config_toml)?;
+
+    // --test-notify is standalone: fire a sample alert and exit (no repos/token needed).
+    if cli.test_notify {
+        let sound = !cli.no_sound && file.sound.unwrap_or(true);
+        notify::test(sound);
+        return Ok(());
+    }
+
     let settings = Settings::resolve(&cli, &file, &paths)?;
     let octo = github::build_client()?;
 
@@ -73,6 +81,9 @@ async fn run_once(octo: octocrab::Octocrab, settings: &Settings, paths: &Paths) 
         watch: None,
         spinner: 0,
         loading: false,
+        hyperlinks: true,
+        selected: None,
+        prompt: None,
     };
     let lines = ui::build_lines(&frame);
     print!("{}", ui::lines_to_ansi(&lines));

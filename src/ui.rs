@@ -15,7 +15,7 @@ const W_FINISHED: usize = 14;
 const W_DURATION: usize = 9;
 const W_ETA: usize = 9;
 const W_RECENT: usize = 13;
-const W_FAILSINCE: usize = 11;
+const W_COMMIT: usize = 8;
 
 /// Everything the renderer needs for one frame.
 pub struct Frame<'a> {
@@ -26,6 +26,12 @@ pub struct Frame<'a> {
     pub watch: Option<WatchInfo>,
     pub spinner: usize,
     pub loading: bool,
+    /// Emit OSC-8 hyperlinks (one-shot ANSI only; the TUI buffer can't carry them).
+    pub hyperlinks: bool,
+    /// Flat index (over all data rows in render order) of the selected row.
+    pub selected: Option<usize>,
+    /// A prompt/status line shown under the header (e.g. a re-run confirm).
+    pub prompt: Option<Line<'static>>,
 }
 
 pub struct WatchInfo {
@@ -59,13 +65,18 @@ pub fn build_lines(f: &Frame) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(""));
     lines.push(header_line(f));
+    if let Some(prompt) = &f.prompt {
+        lines.push(prompt.clone());
+    }
     lines.push(Line::from(""));
 
+    // Counter over every data row, in render order, for selection highlighting.
+    let mut row_idx = 0usize;
     if f.aggregate {
-        build_aggregate(f, &mut lines);
+        build_aggregate(f, &mut lines, &mut row_idx);
     } else {
         for repo in f.results {
-            build_repo(repo, f, &mut lines);
+            build_repo(repo, f, &mut lines, &mut row_idx);
         }
     }
     lines
@@ -87,13 +98,16 @@ fn header_line(f: &Frame) -> Line<'static> {
             format!("  ⟳ every {}s ·{spin}", w.interval),
             Style::default().fg(Color::Cyan),
         ));
-        spans.push(Span::styled("   r refresh · q quit".to_string(), dim()));
+        spans.push(Span::styled(
+            "   ↑↓ select · x rerun · o open · t test · r refresh · q quit".to_string(),
+            dim(),
+        ));
     }
     Line::from(spans)
 }
 
 // ── per-repo tables ──────────────────────────────────────────────
-fn build_repo(repo: &RepoResult, f: &Frame, lines: &mut Vec<Line<'static>>) {
+fn build_repo(repo: &RepoResult, f: &Frame, lines: &mut Vec<Line<'static>>, row_idx: &mut usize) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(repo.repo.clone(), bold(Color::Cyan)),
@@ -130,14 +144,23 @@ fn build_repo(repo: &RepoResult, f: &Frame, lines: &mut Vec<Line<'static>>) {
     lines.push(header_row(name_w, "Workflow"));
     lines.push(border(&widths, '├', '┼', '┤'));
     for row in &repo.rows {
-        lines.push(data_row(&row.workflow_name, row, f, name_w));
+        let selected = f.selected == Some(*row_idx);
+        *row_idx += 1;
+        lines.push(data_row(
+            &row.workflow_name,
+            &repo.repo,
+            row,
+            f,
+            name_w,
+            selected,
+        ));
     }
     lines.push(border(&widths, '└', '┴', '┘'));
     lines.push(Line::from(""));
 }
 
 // ── aggregate (single) table ─────────────────────────────────────
-fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
+fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>, row_idx: &mut usize) {
     // Compute label width across all (short_repo/workflow) labels.
     let mut entries: Vec<(&str, &WorkflowRow, String)> = Vec::new();
     for repo in f.results {
@@ -181,13 +204,15 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
     lines.push(border(&widths, '├', '┼', '┤'));
 
     let mut prev_short: Option<String> = None;
-    for (_repo, row, label) in &entries {
+    for (repo, row, label) in &entries {
         let short = label.split('/').next().unwrap_or("").to_string();
         if prev_short.as_ref().is_some_and(|p| p != &short) {
             lines.push(border(&widths, '├', '┼', '┤'));
         }
         prev_short = Some(short);
-        lines.push(data_row(label, row, f, name_w));
+        let selected = f.selected == Some(*row_idx);
+        *row_idx += 1;
+        lines.push(data_row(label, repo, row, f, name_w, selected));
     }
     lines.push(border(&widths, '└', '┴', '┘'));
     lines.push(Line::from(""));
@@ -208,27 +233,13 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
 // ── row + cell construction ──────────────────────────────────────
 fn column_widths(name_w: usize) -> Vec<usize> {
     vec![
-        name_w,
-        W_STATUS,
-        W_STARTED,
-        W_FINISHED,
-        W_DURATION,
-        W_ETA,
-        W_RECENT,
-        W_FAILSINCE,
+        name_w, W_STATUS, W_STARTED, W_FINISHED, W_DURATION, W_ETA, W_RECENT, W_COMMIT,
     ]
 }
 
 fn header_row(name_w: usize, first: &str) -> Line<'static> {
     let titles = [
-        first,
-        "Status",
-        "Started",
-        "Finished",
-        "Duration",
-        "ETA",
-        "Recent",
-        "FailSince",
+        first, "Status", "Started", "Finished", "Duration", "ETA", "Recent", "Commit",
     ];
     let widths = column_widths(name_w);
     let cells: Vec<(Vec<Span>, usize)> = titles
@@ -243,7 +254,14 @@ fn header_row(name_w: usize, first: &str) -> Line<'static> {
     row_line(cells, &widths)
 }
 
-fn data_row(label: &str, row: &WorkflowRow, f: &Frame, name_w: usize) -> Line<'static> {
+fn data_row(
+    label: &str,
+    repo: &str,
+    row: &WorkflowRow,
+    f: &Frame,
+    name_w: usize,
+    selected: bool,
+) -> Line<'static> {
     let widths = column_widths(name_w);
     let now = f.now.with_timezone(&Utc);
 
@@ -283,9 +301,23 @@ fn data_row(label: &str, row: &WorkflowRow, f: &Frame, name_w: usize) -> Line<'s
             eta_text.chars().count().min(W_ETA),
         ),
         recent_cell(&row.recent),
-        fail_cell(row),
+        commit_cell(row, repo, f.hyperlinks),
     ];
-    row_line(cells, &widths)
+    let line = row_line(cells, &widths);
+    if selected { highlight(line) } else { line }
+}
+
+/// Invert a row's spans to mark it as the current selection.
+fn highlight(line: Line<'static>) -> Line<'static> {
+    let spans = line
+        .spans
+        .into_iter()
+        .map(|s| {
+            let style = s.style.add_modifier(Modifier::REVERSED);
+            Span::styled(s.content, style)
+        })
+        .collect::<Vec<_>>();
+    Line::from(spans)
 }
 
 fn eta_cell(row: &WorkflowRow, now: DateTime<Utc>) -> (String, Style) {
@@ -312,18 +344,40 @@ fn eta_cell(row: &WorkflowRow, now: DateTime<Utc>) -> (String, Style) {
     }
 }
 
-fn fail_cell(row: &WorkflowRow) -> (Vec<Span<'static>>, usize) {
-    match (&row.badge, &row.fail_since_sha) {
-        (Badge::Fail, Some(sha)) if !sha.is_empty() => {
+/// The latest run's head commit, as a 7-char SHA. Red when the workflow is
+/// failing, otherwise blue. In one-shot output it's an OSC-8 hyperlink to the
+/// commit on GitHub (⌘-click in iTerm2); the TUI shows the same SHA without the
+/// link (use the `o` key to open the selected row's commit).
+fn commit_cell(row: &WorkflowRow, repo: &str, hyperlinks: bool) -> (Vec<Span<'static>>, usize) {
+    match &row.head_sha {
+        Some(sha) if !sha.is_empty() => {
             let short: String = sha.chars().take(7).collect();
             let len = short.chars().count();
-            (
-                vec![Span::styled(short, Style::default().fg(Color::Red))],
-                len,
-            )
+            let color = if row.badge.is_failure() {
+                Color::Red
+            } else {
+                Color::Blue
+            };
+            let style = Style::default().fg(color);
+            if hyperlinks {
+                let url = commit_url(repo, sha);
+                (vec![Span::styled(osc8(&url, &short), style)], len)
+            } else {
+                (vec![Span::styled(short, style)], len)
+            }
         }
         _ => text_cell("--", dim()),
     }
+}
+
+/// GitHub commit URL for a repo + sha.
+pub fn commit_url(repo: &str, sha: &str) -> String {
+    format!("https://github.com/{repo}/commit/{sha}")
+}
+
+/// Wrap `text` in an OSC-8 hyperlink to `url`.
+fn osc8(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
 }
 
 fn recent_cell(dots: &[Dot]) -> (Vec<Span<'static>>, usize) {
@@ -440,6 +494,7 @@ fn sgr_codes(style: &Style) -> String {
             Color::Red => "31",
             Color::Green => "32",
             Color::Yellow => "33",
+            Color::Blue => "34",
             Color::Cyan => "36",
             Color::White => "37",
             Color::DarkGray => "90",

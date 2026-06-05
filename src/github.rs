@@ -21,6 +21,7 @@ struct RunsResponse {
 
 #[derive(Deserialize)]
 struct ApiRun {
+    id: u64,
     #[serde(default)]
     name: Option<String>,
     workflow_id: u64,
@@ -149,7 +150,8 @@ async fn fetch_repo_inner(
             started_at: Some(latest.started()),
             finished_at: (status == "completed").then_some(latest.updated_at),
             eta_total_secs: estimate_duration(&group),
-            fail_since_sha: fail_since(&group),
+            head_sha: (!latest.head_sha.is_empty()).then(|| latest.head_sha.clone()),
+            run_id: latest.id,
             recent: recent_dots(&group),
         });
     }
@@ -183,19 +185,6 @@ fn estimate_duration(group: &[ApiRun]) -> Option<i64> {
         .iter()
         .find(|r| r.conclusion.as_deref() == Some("success"))
         .map(|r| (r.updated_at - r.started()).num_seconds().max(0))
-}
-
-/// First commit SHA of the current consecutive-failure streak (newest→oldest).
-fn fail_since(group: &[ApiRun]) -> Option<String> {
-    let mut sha = None;
-    for run in group {
-        if run.conclusion.as_deref() == Some("failure") {
-            sha = Some(run.head_sha.clone());
-        } else {
-            break;
-        }
-    }
-    sha
 }
 
 fn recent_dots(group: &[ApiRun]) -> Vec<Dot> {
