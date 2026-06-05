@@ -23,13 +23,15 @@ It's a Rust rewrite of a shell tool, built for a richer terminal experience: ani
 
 ## Features
 
-- **Per-workflow table** — latest run per workflow on a branch: status, started/finished (local time), duration, ETA, recent history, and the commit a failure streak started on.
+- **Per-workflow table** — latest run per workflow on a branch: status, started/finished (local time), duration, ETA, recent history, and the commit that kicked it off.
 - **Recent column** — the last few runs as colored dots: `●` green pass, `●` red fail, `◐` running, `○` other. Spot a flaky workflow at a glance.
+- **Clickable commit** — the Commit column shows the latest run's head SHA (red when failing). In one-shot output it's an OSC-8 hyperlink to the commit on GitHub (⌘-click in iTerm2); in watch mode, press `o` to open the selected row's commit.
 - **ETA** — for in-progress runs, estimated time remaining based on the most recent successful run's duration (`~3m 10s`), turning red with `+overrun` once it runs long.
-- **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, `r` to refresh now, and `q`/`Esc`/`Ctrl-C` to quit. Auto-exits after 6h.
+- **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, row selection, and a 6h auto-exit.
+- **Re-run from the TUI** — select a workflow with `↑`/`↓` and press `x` to re-run it (with a `y`/`n` confirm), via `gh api`. No browser round-trip.
 - **Aggregate view** — collapse every repo into one table grouped by repo.
-- **Notifications** — on a green→red or red→green transition, fires a macOS notification + distinct sound (`Basso` for failure, `Glass` for recovery). Degrades to a terminal bell elsewhere.
-- **Efficient** — one page of runs per repo, with latest/recent/fail-since/ETA all derived client-side. Repos fetched concurrently.
+- **Notifications** — on a green→red or red→green transition, fires a macOS notification + distinct sound (`Basso` for failure, `Glass` for recovery); degrades to a terminal bell elsewhere. Test the channel any time with `--test-notify` or the `t` key.
+- **Efficient** — one page of runs per repo, with latest/recent/commit/ETA all derived client-side. Repos fetched concurrently.
 
 ## Install
 
@@ -53,6 +55,7 @@ actiontui -w                                # watch mode (60s refresh)
 actiontui -w 30                             # watch mode, 30s refresh
 actiontui -a -R r1 -R r2                    # aggregate into a single table
 actiontui --no-sound -w                     # visual notifications only
+actiontui --test-notify                     # fire a sample notification + sound, then exit
 ```
 
 ```sh
@@ -70,11 +73,14 @@ Repos are resolved in this order:
 
 ### Keys (watch mode)
 
-| Key            | Action          |
-| -------------- | --------------- |
-| `r` / `R`      | refresh now     |
-| `q` / `Esc`    | quit            |
-| `Ctrl-C`       | quit            |
+| Key             | Action                                   |
+| --------------- | ---------------------------------------- |
+| `↑` / `↓` (`k`/`j`) | move the selection                   |
+| `x` / `Enter`   | re-run the selected workflow (`y`/`n` confirm) |
+| `o`             | open the selected row's commit in the browser |
+| `t`             | fire a test notification + sound         |
+| `r` / `R`       | refresh now                              |
+| `q` / `Esc` / `Ctrl-C` | quit                              |
 
 ## Configuration
 
@@ -118,9 +124,11 @@ Requires a repository secret `CARGO_REGISTRY_TOKEN` (a crates.io API token from 
 
 ## Roadmap
 
-- **Clickable commit SHA** — render the "FailSince"/head commit as an OSC-8 terminal hyperlink to the GitHub commit page.
-- **Manual notification / sound test** — a key (or flag) to fire a sample notification + sound on demand, to verify the channel works.
-- **Re-run from the TUI** — select a workflow and trigger a re-run via the GitHub API (`POST .../runs/{id}/rerun`) without leaving the dashboard.
+Recently shipped: clickable commit SHA, on-demand notification/sound test, and re-run from the TUI. Ideas under consideration:
+
+- **Re-run only failed jobs** — `rerun-failed-jobs` as an alternate to a full re-run.
+- **Branch switcher** — change the inspected branch from within the TUI.
+- **Per-workflow drill-in** — expand a row to its recent runs / job list.
 
 ## License
 
