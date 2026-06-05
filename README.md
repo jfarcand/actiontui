@@ -51,13 +51,18 @@ actiontui -a -R r1 -R r2                    # aggregate into a single table
 actiontui --no-sound -w                     # visual notifications only
 ```
 
+```sh
+actiontui -x "Update #" -x "in /."         # hide workflows matching either pattern
+```
+
 ### Repo resolution
 
 Repos are resolved in this order:
 
 1. `-R`/`--repo` flags and positional args
-2. `~/.config/actiontui/repos.conf` — one `owner/repo` per line (`#` comments allowed)
-3. the `origin` git remote of the current directory
+2. `repos` in `~/.config/actiontui/config.toml`
+3. `~/.config/actiontui/repos.conf` — one `owner/repo` per line (`#` comments allowed)
+4. the `origin` git remote of the current directory
 
 ### Keys (watch mode)
 
@@ -69,9 +74,24 @@ Repos are resolved in this order:
 
 ## Configuration
 
-| Path                                  | Purpose                                    |
-| ------------------------------------- | ------------------------------------------ |
-| `~/.config/actiontui/repos.conf`      | default repo list                          |
+`~/.config/actiontui/config.toml` holds defaults (CLI flags override it):
+
+```toml
+repos = ["owner/repo1", "owner/repo2"]
+branch = "main"
+aggregate = true
+sound = true
+# Hide workflows whose name contains any of these (case-insensitive):
+exclude = ["Update #", "in /."]   # drops Dependabot version-update runs
+# Launch in watch mode without typing -w:
+# watch = true
+# interval = 60
+```
+
+| Path                                  | Purpose                                       |
+| ------------------------------------- | --------------------------------------------- |
+| `~/.config/actiontui/config.toml`     | defaults (repos, branch, aggregate, exclude…) |
+| `~/.config/actiontui/repos.conf`      | alternate repo list (one per line)            |
 | `~/.config/actiontui/state.json`      | last-known conclusions (transition detection) |
 
 ## How it works
