@@ -56,6 +56,9 @@ pub struct FileConfig {
     /// Watch refresh interval in seconds.
     pub interval: Option<u64>,
     pub sound: Option<bool>,
+    /// Hide workflows whose name contains any of these (case-insensitive).
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 impl FileConfig {
@@ -77,6 +80,8 @@ pub struct Settings {
     /// `Some(interval_secs)` enables watch mode.
     pub watch: Option<u64>,
     pub sound: bool,
+    /// Case-insensitive substrings; workflows matching any are hidden.
+    pub exclude: Vec<String>,
 }
 
 impl Settings {
@@ -101,7 +106,14 @@ impl Settings {
         // --no-sound forces off; otherwise config, defaulting to on.
         let sound = !cli.no_sound && file.sound.unwrap_or(true);
 
-        Ok(Settings { repos, branch, aggregate, watch, sound })
+        let exclude = cli
+            .exclude
+            .iter()
+            .chain(file.exclude.iter())
+            .cloned()
+            .collect();
+
+        Ok(Settings { repos, branch, aggregate, watch, sound, exclude })
     }
 }
 

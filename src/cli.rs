@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long = "no-sound")]
     pub no_sound: bool,
 
+    /// Hide workflows whose name contains this (case-insensitive). Repeatable.
+    #[arg(short = 'x', long = "exclude", value_name = "PATTERN")]
+    pub exclude: Vec<String>,
+
     /// Additional repos as positional args (owner/repo).
     #[arg(value_name = "OWNER/REPO")]
     pub repos: Vec<String>,

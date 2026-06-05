@@ -85,8 +85,16 @@ fn gh_token() -> Option<String> {
 }
 
 /// Fetch and derive the workflow rows for a single repo + branch.
-pub async fn fetch_repo(octo: &Octocrab, repo: &str, branch: &str) -> RepoResult {
-    match fetch_repo_inner(octo, repo, branch).await {
+///
+/// `exclude` holds case-insensitive substrings; any workflow whose name matches
+/// one is dropped (so it also can't trigger a notification).
+pub async fn fetch_repo(
+    octo: &Octocrab,
+    repo: &str,
+    branch: &str,
+    exclude: &[String],
+) -> RepoResult {
+    match fetch_repo_inner(octo, repo, branch, exclude).await {
         Ok(rows) => RepoResult { repo: repo.to_string(), rows, error: None },
         Err(e) => RepoResult {
             repo: repo.to_string(),
@@ -96,7 +104,12 @@ pub async fn fetch_repo(octo: &Octocrab, repo: &str, branch: &str) -> RepoResult
     }
 }
 
-async fn fetch_repo_inner(octo: &Octocrab, repo: &str, branch: &str) -> Result<Vec<WorkflowRow>> {
+async fn fetch_repo_inner(
+    octo: &Octocrab,
+    repo: &str,
+    branch: &str,
+    exclude: &[String],
+) -> Result<Vec<WorkflowRow>> {
     let active = active_workflow_ids(octo, repo).await.unwrap_or_default();
 
     let runs_route = format!(
@@ -135,6 +148,14 @@ async fn fetch_repo_inner(octo: &Octocrab, repo: &str, branch: &str) -> Result<V
             eta_total_secs: estimate_duration(&group),
             fail_since_sha: fail_since(&group),
             recent: recent_dots(&group),
+        });
+    }
+
+    if !exclude.is_empty() {
+        let patterns: Vec<String> = exclude.iter().map(|p| p.to_lowercase()).collect();
+        rows.retain(|r| {
+            let name = r.workflow_name.to_lowercase();
+            !patterns.iter().any(|p| name.contains(p))
         });
     }
 

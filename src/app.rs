@@ -26,6 +26,7 @@ pub struct App {
     branch: String,
     aggregate: bool,
     sound: bool,
+    exclude: Vec<String>,
     interval: Duration,
 
     results: Vec<RepoResult>,
@@ -44,6 +45,7 @@ impl App {
         branch: String,
         aggregate: bool,
         sound: bool,
+        exclude: Vec<String>,
         interval_secs: u64,
         state: State,
     ) -> App {
@@ -54,6 +56,7 @@ impl App {
             branch,
             aggregate,
             sound,
+            exclude,
             interval: Duration::from_secs(interval_secs.max(5)),
             results: Vec::new(),
             loading: false,
@@ -128,9 +131,10 @@ impl App {
         let octo = Arc::clone(&self.octo);
         let repos = self.repos.clone();
         let branch = self.branch.clone();
+        let exclude = self.exclude.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let results = fetch_all(&octo, &repos, &branch).await;
+            let results = fetch_all(&octo, &repos, &branch, &exclude).await;
             let _ = tx.send(results).await;
         });
     }
@@ -168,7 +172,14 @@ impl App {
 }
 
 /// Fetch every repo concurrently.
-pub async fn fetch_all(octo: &Octocrab, repos: &[String], branch: &str) -> Vec<RepoResult> {
-    let futs = repos.iter().map(|r| crate::github::fetch_repo(octo, r, branch));
+pub async fn fetch_all(
+    octo: &Octocrab,
+    repos: &[String],
+    branch: &str,
+    exclude: &[String],
+) -> Vec<RepoResult> {
+    let futs = repos
+        .iter()
+        .map(|r| crate::github::fetch_repo(octo, r, branch, exclude));
     futures::future::join_all(futs).await
 }
