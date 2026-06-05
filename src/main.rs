@@ -17,7 +17,7 @@ use clap::Parser;
 
 use crate::app::App;
 use crate::cli::Cli;
-use crate::config::Paths;
+use crate::config::{FileConfig, Paths, Settings};
 use crate::state::State;
 use crate::ui::Frame;
 
@@ -28,42 +28,44 @@ async fn main() -> Result<()> {
     let paths = Paths::resolve()?;
     paths.ensure()?;
 
-    let repos = config::resolve_repos(&cli.explicit_repos(), &paths)?;
+    let file = FileConfig::load(&paths.config_toml)?;
+    let settings = Settings::resolve(&cli, &file, &paths)?;
     let octo = github::build_client()?;
-    let sound = !cli.no_sound;
 
-    match cli.watch {
+    match settings.watch {
         Some(interval) => {
             if !std::io::stdout().is_terminal() {
                 bail!("watch mode needs an interactive terminal — run without -w to print a one-shot table");
             }
             let state = State::load(&paths.state_file);
-            let app = App::new(octo, repos, cli.branch, cli.aggregate, sound, interval, state);
+            let app = App::new(
+                octo,
+                settings.repos,
+                settings.branch,
+                settings.aggregate,
+                settings.sound,
+                interval,
+                state,
+            );
             app.run().await
         }
-        None => run_once(octo, repos, &cli, &paths, sound).await,
+        None => run_once(octo, &settings, &paths).await,
     }
 }
 
 /// One-shot snapshot: fetch, notify on transitions, print an ANSI table.
-async fn run_once(
-    octo: octocrab::Octocrab,
-    repos: Vec<String>,
-    cli: &Cli,
-    paths: &Paths,
-    sound: bool,
-) -> Result<()> {
-    let results = app::fetch_all(&octo, &repos, &cli.branch).await;
+async fn run_once(octo: octocrab::Octocrab, settings: &Settings, paths: &Paths) -> Result<()> {
+    let results = app::fetch_all(&octo, &settings.repos, &settings.branch).await;
 
     let mut state = State::load(&paths.state_file);
     let transitions = state.diff(&results);
-    notify::announce(&transitions, &cli.branch, sound);
+    notify::announce(&transitions, &settings.branch, settings.sound);
     state.commit(&results);
 
     let frame = Frame {
         results: &results,
-        aggregate: cli.aggregate,
-        branch: &cli.branch,
+        aggregate: settings.aggregate,
+        branch: &settings.branch,
         now: Local::now(),
         watch: None,
         spinner: 0,

@@ -19,9 +19,9 @@ pub struct Cli {
     #[arg(short = 'a', long = "aggregate")]
     pub aggregate: bool,
 
-    /// Branch to inspect.
-    #[arg(short = 'b', long = "branch", default_value = "main")]
-    pub branch: String,
+    /// Branch to inspect (default: main, or `branch` from config.toml).
+    #[arg(short = 'b', long = "branch")]
+    pub branch: Option<String>,
 
     /// Repo to watch (owner/repo). Repeatable.
     #[arg(short = 'R', long = "repo", value_name = "OWNER/REPO")]

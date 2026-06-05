@@ -176,7 +176,7 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
         .map(|(_, _, l)| l.chars().count())
         .max()
         .unwrap_or(8)
-        .clamp(8, 50);
+        .clamp(8, 40);
     let widths = column_widths(name_w);
 
     lines.push(border(&widths, '┌', '┬', '┐'));
@@ -255,7 +255,7 @@ fn data_row(label: &str, row: &WorkflowRow, f: &Frame, name_w: usize) -> Line<'s
     let (eta_text, eta_style) = eta_cell(row, now);
 
     let cells = vec![
-        text_cell(label, Style::default().fg(Color::White)),
+        text_cell_w(label, name_w, Style::default().fg(Color::White)),
         status_cell,
         text_cell(&started, dim()),
         text_cell(&finished, dim()),
@@ -319,9 +319,14 @@ fn recent_cell(dots: &[Dot]) -> (Vec<Span<'static>>, usize) {
     (spans, width)
 }
 
-/// A single-span padded/truncated text cell. Returns (spans, content_width).
+/// A single-span text cell, hard-capped so it can never overflow a column.
 fn text_cell(s: &str, style: Style) -> (Vec<Span<'static>>, usize) {
-    let t = truncate(s, 64); // hard cap; column padding handles the rest
+    text_cell_w(s, 64, style)
+}
+
+/// A single-span text cell truncated to `w` columns. Returns (spans, content_width).
+fn text_cell_w(s: &str, w: usize, style: Style) -> (Vec<Span<'static>>, usize) {
+    let t = truncate(s, w);
     let len = t.chars().count();
     (vec![Span::styled(t, style)], len)
 }
