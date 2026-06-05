@@ -1,0 +1,29 @@
+[package]
+name = "actiontui"
+version = "0.1.0"
+edition = "2024"
+description = "A Ratatui terminal dashboard for watching GitHub Actions workflow runs"
+license = "MIT"
+repository = "https://github.com/jfarcand/actiontui"
+authors = ["jfarcand"]
+readme = "README.md"
+keywords = ["github", "actions", "ci", "tui", "ratatui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0.102"
+chrono = "0.4.45"
+clap = { version = "4.6.1", features = ["derive"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+dirs = "6.0.0"
+futures = "0.3.32"
+octocrab = "0.53.0"
+ratatui = "0.30.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

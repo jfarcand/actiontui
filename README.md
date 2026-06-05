@@ -1,0 +1,83 @@
+# actiontui
+
+A [Ratatui](https://ratatui.rs) terminal dashboard for watching **GitHub Actions** workflow runs across one or more repositories — with a live-refreshing TUI, recent-history sparkdots, ETA estimates, and desktop notifications (with sound) when CI turns red or recovers.
+
+It's a Rust rewrite of a shell tool, built for a richer terminal experience: animated spinners, colored status badges, a "Recent" run-history column, and an alt-screen watch mode with bounded memory.
+
+```
+  GitHub Actions  2026-06-05 17:07:16
+
+  jfarcand/pierre_mcp_server (main)
+  ┌────────────────────────┬──────────┬────────────────┬────────────────┬──────────┬──────────┬───────────────┬────────────┐
+  │ Workflow               │ Status   │ Started        │ Finished       │ Duration │ ETA      │ Recent        │ FailSince  │
+  ├────────────────────────┼──────────┼────────────────┼────────────────┼──────────┼──────────┼───────────────┼────────────┤
+  │ API Contracts          │ pass     │ 02-16 18:26:05 │ 02-16 18:34:55 │ 8m 50s   │ --       │ ● ●           │ --         │
+  │ Backend CI             │ FAIL     │ 03-07 23:17:54 │ 03-08 00:00:48 │ 42m 54s  │ --       │ ● ● ● ● ● ●   │ 04948a9    │
+  │ Code Coverage          │ pass     │ 03-07 23:40:23 │ 03-08 00:22:20 │ 41m 57s  │ --       │ ● ● ● ● ● ●   │ --         │
+  └────────────────────────┴──────────┴────────────────┴────────────────┴──────────┴──────────┴───────────────┴────────────┘
+```
+
+## Features
+
+- **Per-workflow table** — latest run per workflow on a branch: status, started/finished (local time), duration, ETA, recent history, and the commit a failure streak started on.
+- **Recent column** — the last few runs as colored dots: `●` green pass, `●` red fail, `◐` running, `○` other. Spot a flaky workflow at a glance.
+- **ETA** — for in-progress runs, estimated time remaining based on the most recent successful run's duration (`~3m 10s`), turning red with `+overrun` once it runs long.
+- **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, `r` to refresh now, and `q`/`Esc`/`Ctrl-C` to quit. Auto-exits after 6h.
+- **Aggregate view** — collapse every repo into one table grouped by repo.
+- **Notifications** — on a green→red or red→green transition, fires a macOS notification + distinct sound (`Basso` for failure, `Glass` for recovery). Degrades to a terminal bell elsewhere.
+- **Efficient** — one page of runs per repo, with latest/recent/fail-since/ETA all derived client-side. Repos fetched concurrently.
+
+## Install
+
+Requires the [`gh`](https://cli.github.com) CLI authenticated (`gh auth login`) — actiontui pulls its token from `gh auth token`, or from `GH_TOKEN`/`GITHUB_TOKEN`.
+
+```sh
+cargo install --path .
+# or, after publishing:
+# cargo install actiontui
+```
+
+## Usage
+
+```sh
+actiontui                                  # current repo's git remote, main branch
+actiontui -b feature-x                     # a specific branch
+actiontui -R owner/repo                     # a specific repo
+actiontui -R owner/repo1 -R owner/repo2     # multiple repos
+actiontui owner/repo1 owner/repo2           # multiple repos (positional)
+actiontui -w                                # watch mode (60s refresh)
+actiontui -w 30                             # watch mode, 30s refresh
+actiontui -a -R r1 -R r2                    # aggregate into a single table
+actiontui --no-sound -w                     # visual notifications only
+```
+
+### Repo resolution
+
+Repos are resolved in this order:
+
+1. `-R`/`--repo` flags and positional args
+2. `~/.config/actiontui/repos.conf` — one `owner/repo` per line (`#` comments allowed)
+3. the `origin` git remote of the current directory
+
+### Keys (watch mode)
+
+| Key            | Action          |
+| -------------- | --------------- |
+| `r` / `R`      | refresh now     |
+| `q` / `Esc`    | quit            |
+| `Ctrl-C`       | quit            |
+
+## Configuration
+
+| Path                                  | Purpose                                    |
+| ------------------------------------- | ------------------------------------------ |
+| `~/.config/actiontui/repos.conf`      | default repo list                          |
+| `~/.config/actiontui/state.json`      | last-known conclusions (transition detection) |
+
+## How it works
+
+For each repo, actiontui fetches one page (100) of workflow runs for the branch plus the list of active workflows, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the failing-since commit (oldest run of the current consecutive-failure streak), and the ETA (most recent successful run's wall-clock duration). State transitions are detected by diffing against the persisted `state.json`.
+
+## License
+
+MIT
