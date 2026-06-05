@@ -1,5 +1,9 @@
 # actiontui
 
+[![CI](https://github.com/jfarcand/actiontui/actions/workflows/ci.yml/badge.svg)](https://github.com/jfarcand/actiontui/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/actiontui.svg)](https://crates.io/crates/actiontui)
+[![license](https://img.shields.io/crates/l/actiontui.svg)](LICENSE)
+
 A [Ratatui](https://ratatui.rs) terminal dashboard for watching **GitHub Actions** workflow runs across one or more repositories — with a live-refreshing TUI, recent-history sparkdots, ETA estimates, and desktop notifications (with sound) when CI turns red or recovers.
 
 It's a Rust rewrite of a shell tool, built for a richer terminal experience: animated spinners, colored status badges, a "Recent" run-history column, and an alt-screen watch mode with bounded memory.
@@ -98,6 +102,27 @@ exclude = ["Update #", "in /."]   # drops Dependabot version-update runs
 
 For each repo, actiontui fetches one page (100) of workflow runs for the branch plus the list of active workflows, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the failing-since commit (oldest run of the current consecutive-failure streak), and the ETA (most recent successful run's wall-clock duration). State transitions are detected by diffing against the persisted `state.json`.
 
+## Releasing
+
+CI (`.github/workflows/ci.yml`) runs fmt + clippy + build + test on every push and PR.
+
+Publishing to [crates.io](https://crates.io) is automated by `.github/workflows/release.yml` — push a version tag and it verifies the tag matches `Cargo.toml`, builds, and publishes:
+
+```sh
+# bump version in Cargo.toml first, then:
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Requires a repository secret `CARGO_REGISTRY_TOKEN` (a crates.io API token from <https://crates.io/settings/tokens>).
+
+## Roadmap
+
+- **Clickable commit SHA** — render the "FailSince"/head commit as an OSC-8 terminal hyperlink to the GitHub commit page.
+- **Manual notification / sound test** — a key (or flag) to fire a sample notification + sound on demand, to verify the channel works.
+- **Re-run from the TUI** — select a workflow and trigger a re-run via the GitHub API (`POST .../runs/{id}/rerun`) without leaving the dashboard.
+
 ## License
 
 MIT
+

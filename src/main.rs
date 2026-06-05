@@ -35,7 +35,9 @@ async fn main() -> Result<()> {
     match settings.watch {
         Some(interval) => {
             if !std::io::stdout().is_terminal() {
-                bail!("watch mode needs an interactive terminal — run without -w to print a one-shot table");
+                bail!(
+                    "watch mode needs an interactive terminal — run without -w to print a one-shot table"
+                );
             }
             let state = State::load(&paths.state_file);
             let app = App::new(

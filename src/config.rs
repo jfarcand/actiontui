@@ -66,8 +66,8 @@ impl FileConfig {
         if !path.exists() {
             return Ok(FileConfig::default());
         }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
     }
 }
@@ -113,7 +113,14 @@ impl Settings {
             .cloned()
             .collect();
 
-        Ok(Settings { repos, branch, aggregate, watch, sound, exclude })
+        Ok(Settings {
+            repos,
+            branch,
+            aggregate,
+            watch,
+            sound,
+            exclude,
+        })
     }
 }
 
@@ -176,5 +183,8 @@ fn parse_github_slug(url: &str) -> Option<String> {
 
 fn dedup(repos: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    repos.into_iter().filter(|r| seen.insert(r.clone())).collect()
+    repos
+        .into_iter()
+        .filter(|r| seen.insert(r.clone()))
+        .collect()
 }

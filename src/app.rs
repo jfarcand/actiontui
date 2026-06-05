@@ -74,10 +74,7 @@ impl App {
         res
     }
 
-    async fn event_loop(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-    ) -> Result<()> {
+    async fn event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
         let mut events = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(120));
         let (tx, mut rx) = mpsc::channel::<Vec<RepoResult>>(4);
@@ -149,8 +146,8 @@ impl App {
     }
 
     fn draw(&self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
-        let remaining = self.interval.as_secs() as i64
-            - self.last_refresh.elapsed().as_secs() as i64;
+        let remaining =
+            self.interval.as_secs() as i64 - self.last_refresh.elapsed().as_secs() as i64;
         let frame = Frame {
             results: &self.results,
             aggregate: self.aggregate,

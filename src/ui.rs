@@ -75,10 +75,7 @@ fn header_line(f: &Frame) -> Line<'static> {
     let mut spans = vec![
         Span::raw("  "),
         Span::styled("GitHub Actions", bold(Color::Cyan)),
-        Span::styled(
-            format!("  {}", f.now.format("%Y-%m-%d %H:%M:%S")),
-            dim(),
-        ),
+        Span::styled(format!("  {}", f.now.format("%Y-%m-%d %H:%M:%S")), dim()),
     ];
     if let Some(w) = &f.watch {
         let spin = if f.loading {
@@ -90,10 +87,7 @@ fn header_line(f: &Frame) -> Line<'static> {
             format!("  ⟳ every {}s ·{spin}", w.interval),
             Style::default().fg(Color::Cyan),
         ));
-        spans.push(Span::styled(
-            "   r refresh · q quit".to_string(),
-            dim(),
-        ));
+        spans.push(Span::styled("   r refresh · q quit".to_string(), dim()));
     }
     Line::from(spans)
 }
@@ -164,7 +158,10 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
             if let Some(err) = &e.error {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(format!("✗ {}: {err}", e.repo), Style::default().fg(Color::Red)),
+                    Span::styled(
+                        format!("✗ {}: {err}", e.repo),
+                        Style::default().fg(Color::Red),
+                    ),
                 ]));
             }
         }
@@ -199,7 +196,10 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
         if let Some(err) = &e.error {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("✗ {}: {err}", e.repo), Style::default().fg(Color::Red)),
+                Span::styled(
+                    format!("✗ {}: {err}", e.repo),
+                    Style::default().fg(Color::Red),
+                ),
             ]));
         }
     }
@@ -208,13 +208,27 @@ fn build_aggregate(f: &Frame, lines: &mut Vec<Line<'static>>) {
 // ── row + cell construction ──────────────────────────────────────
 fn column_widths(name_w: usize) -> Vec<usize> {
     vec![
-        name_w, W_STATUS, W_STARTED, W_FINISHED, W_DURATION, W_ETA, W_RECENT, W_FAILSINCE,
+        name_w,
+        W_STATUS,
+        W_STARTED,
+        W_FINISHED,
+        W_DURATION,
+        W_ETA,
+        W_RECENT,
+        W_FAILSINCE,
     ]
 }
 
 fn header_row(name_w: usize, first: &str) -> Line<'static> {
     let titles = [
-        first, "Status", "Started", "Finished", "Duration", "ETA", "Recent", "FailSince",
+        first,
+        "Status",
+        "Started",
+        "Finished",
+        "Duration",
+        "ETA",
+        "Recent",
+        "FailSince",
     ];
     let widths = column_widths(name_w);
     let cells: Vec<(Vec<Span>, usize)> = titles
@@ -235,7 +249,11 @@ fn data_row(label: &str, row: &WorkflowRow, f: &Frame, name_w: usize) -> Line<'s
 
     // Status badge (spinner suffix while active).
     let status_text = if row.badge.is_active() {
-        format!("{} {}", SPINNER[f.spinner % SPINNER.len()], row.badge.label())
+        format!(
+            "{} {}",
+            SPINNER[f.spinner % SPINNER.len()],
+            row.badge.label()
+        )
     } else {
         row.badge.label().to_string()
     };
@@ -260,7 +278,10 @@ fn data_row(label: &str, row: &WorkflowRow, f: &Frame, name_w: usize) -> Line<'s
         text_cell(&started, dim()),
         text_cell(&finished, dim()),
         text_cell(&duration, dim()),
-        (vec![Span::styled(truncate(&eta_text, W_ETA), eta_style)], eta_text.chars().count().min(W_ETA)),
+        (
+            vec![Span::styled(truncate(&eta_text, W_ETA), eta_style)],
+            eta_text.chars().count().min(W_ETA),
+        ),
         recent_cell(&row.recent),
         fail_cell(row),
     ];
@@ -276,9 +297,15 @@ fn eta_cell(row: &WorkflowRow, now: DateTime<Utc>) -> (String, Style) {
             let elapsed = (now - start).num_seconds();
             let remaining = total - elapsed;
             if remaining >= 0 {
-                (format!("~{}", fmt_duration(remaining)), Style::default().fg(Color::Yellow))
+                (
+                    format!("~{}", fmt_duration(remaining)),
+                    Style::default().fg(Color::Yellow),
+                )
             } else {
-                (format!("+{}", fmt_duration(-remaining)), Style::default().fg(Color::Red))
+                (
+                    format!("+{}", fmt_duration(-remaining)),
+                    Style::default().fg(Color::Red),
+                )
             }
         }
         _ => ("--".into(), dim()),
@@ -290,7 +317,10 @@ fn fail_cell(row: &WorkflowRow) -> (Vec<Span<'static>>, usize) {
         (Badge::Fail, Some(sha)) if !sha.is_empty() => {
             let short: String = sha.chars().take(7).collect();
             let len = short.chars().count();
-            (vec![Span::styled(short, Style::default().fg(Color::Red))], len)
+            (
+                vec![Span::styled(short, Style::default().fg(Color::Red))],
+                len,
+            )
         }
         _ => text_cell("--", dim()),
     }

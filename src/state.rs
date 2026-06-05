@@ -27,7 +27,10 @@ impl State {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        State { path: path.to_path_buf(), store }
+        State {
+            path: path.to_path_buf(),
+            store,
+        }
     }
 
     /// Compare the freshly-fetched results against stored state, returning the
@@ -37,7 +40,9 @@ impl State {
         for repo in results {
             let prev = self.store.get(&repo.repo);
             for row in &repo.rows {
-                let prev_conclusion = prev.and_then(|m| m.get(&row.workflow_name)).map(String::as_str);
+                let prev_conclusion = prev
+                    .and_then(|m| m.get(&row.workflow_name))
+                    .map(String::as_str);
                 match (&row.badge, prev_conclusion) {
                     (b, Some("success")) if b.is_failure() => {
                         transitions.push(Transition::Failure {

@@ -56,9 +56,8 @@ struct ApiWorkflow {
 /// Build an authenticated client, pulling the token from `gh auth token`
 /// (falls back to GITHUB_TOKEN / GH_TOKEN).
 pub fn build_client() -> Result<Octocrab> {
-    let token = gh_token().context(
-        "no GitHub token found — run `gh auth login`, or set GITHUB_TOKEN/GH_TOKEN",
-    )?;
+    let token = gh_token()
+        .context("no GitHub token found — run `gh auth login`, or set GITHUB_TOKEN/GH_TOKEN")?;
     Octocrab::builder()
         .personal_token(token)
         .build()
@@ -95,7 +94,11 @@ pub async fn fetch_repo(
     exclude: &[String],
 ) -> RepoResult {
     match fetch_repo_inner(octo, repo, branch, exclude).await {
-        Ok(rows) => RepoResult { repo: repo.to_string(), rows, error: None },
+        Ok(rows) => RepoResult {
+            repo: repo.to_string(),
+            rows,
+            error: None,
+        },
         Err(e) => RepoResult {
             repo: repo.to_string(),
             rows: Vec::new(),
