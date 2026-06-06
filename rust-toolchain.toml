@@ -1,0 +1,5 @@
+# Pin the toolchain so local and CI agree — strict pedantic/nursery lints drift
+# between stable releases, so a floating `stable` breaks clippy unpredictably.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]

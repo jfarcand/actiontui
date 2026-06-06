@@ -35,7 +35,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
 
       - name: Configure git
         run: |
@@ -126,8 +128,9 @@ jobs:
         with:
           ref: v${{ needs.version.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.94.0"
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
@@ -171,7 +174,9 @@ jobs:
         with:
           ref: v${{ needs.version.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
 
       - name: Publish to crates.io
         env:
