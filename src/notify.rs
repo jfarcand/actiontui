@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Desktop notifications + sound on CI status transitions (macOS-focused,
 //! degrades to a terminal bell elsewhere).
 
@@ -76,7 +76,7 @@ fn fire(title: &str, body: &str, sound_name: &str, sound: bool) {
     }
 }
 
-/// Quote a string as an AppleScript string literal.
+/// Quote a string as an `AppleScript` string literal.
 #[cfg(target_os = "macos")]
 fn applescript_quote(s: &str) -> String {
     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");

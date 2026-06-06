@@ -1,0 +1,5 @@
+# Disallow anyhow::Context trait methods in favor of structured error types.
+disallowed-methods = [
+    { path = "anyhow::Context::context", reason = "Use structured error types instead of .context()" },
+    { path = "anyhow::Context::with_context", reason = "Use structured error types instead of .with_context()" },
+]

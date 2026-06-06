@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Command-line interface (mirrors the original `ghactions` flags).
 
 use clap::Parser;

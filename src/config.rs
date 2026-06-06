@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Config + settings resolution.
 //!
 //! Effective settings come from three layers, highest priority first:
@@ -8,10 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::cli::Cli;
+use crate::error::{Error, Result};
 
 pub struct Paths {
     pub config_dir: PathBuf,
@@ -22,16 +22,16 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn resolve() -> Result<Paths> {
+    pub fn resolve() -> Result<Self> {
         // Use XDG `~/.config` (matching the original tool and CLI convention),
         // not macOS's `~/Library/Application Support`.
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|p| !p.as_os_str().is_empty())
             .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-            .context("could not determine config directory")?;
+            .ok_or_else(|| Error::Config("could not determine config directory".into()))?;
         let base = config_home.join("actiontui");
-        Ok(Paths {
+        Ok(Self {
             state_file: base.join("state.json"),
             repos_conf: base.join("repos.conf"),
             config_toml: base.join("config.toml"),
@@ -42,7 +42,7 @@ impl Paths {
 
     pub fn ensure(&self) -> Result<()> {
         std::fs::create_dir_all(&self.config_dir)
-            .with_context(|| format!("creating {}", self.config_dir.display()))
+            .map_err(|e| Error::Io(format!("creating {}: {e}", self.config_dir.display())))
     }
 }
 
@@ -65,13 +65,13 @@ pub struct FileConfig {
 }
 
 impl FileConfig {
-    pub fn load(path: &Path) -> Result<FileConfig> {
+    pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
-            return Ok(FileConfig::default());
+            return Ok(Self::default());
         }
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Error::Io(format!("reading {}: {e}", path.display())))?;
+        toml::from_str(&text).map_err(|e| Error::Config(format!("parsing {}: {e}", path.display())))
     }
 }
 
@@ -90,7 +90,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn resolve(cli: &Cli, file: &FileConfig, paths: &Paths) -> Result<Settings> {
+    pub fn resolve(cli: &Cli, file: &FileConfig, paths: &Paths) -> Result<Self> {
         let repos = resolve_repos(&cli.explicit_repos(), file, paths)?;
 
         let branch = cli
@@ -122,7 +122,7 @@ impl Settings {
             .cloned()
             .collect();
 
-        Ok(Settings {
+        Ok(Self {
             repos,
             branch,
             aggregate,
@@ -146,7 +146,7 @@ fn resolve_repos(explicit: &[String], file: &FileConfig, paths: &Paths) -> Resul
     }
     if paths.repos_conf.exists() {
         let text = std::fs::read_to_string(&paths.repos_conf)
-            .with_context(|| format!("reading {}", paths.repos_conf.display()))?;
+            .map_err(|e| Error::Io(format!("reading {}: {e}", paths.repos_conf.display())))?;
         let repos: Vec<String> = text
             .lines()
             .map(str::trim)
@@ -160,10 +160,10 @@ fn resolve_repos(explicit: &[String], file: &FileConfig, paths: &Paths) -> Resul
     if let Some(repo) = git_remote_repo() {
         return Ok(vec![repo]);
     }
-    bail!(
+    Err(Error::Config(format!(
         "no repos specified — pass `-R owner/repo`, list them under `repos` in {}, or run inside a GitHub repo",
         paths.config_toml.display()
-    );
+    )))
 }
 
 /// Parse `owner/repo` out of the origin remote URL of the current directory.

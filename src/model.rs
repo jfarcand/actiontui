@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Domain types shared across fetching, state, and rendering.
 
 use chrono::{DateTime, Utc};
@@ -19,45 +19,47 @@ pub enum Badge {
 
 impl Badge {
     /// Map a GitHub `(status, conclusion)` pair to a coarse badge.
-    pub fn from_run(status: &str, conclusion: Option<&str>) -> Badge {
+    // The two `Other(..)` arms look identical but are distinct: one carries an
+    // unknown *conclusion*, the other an unknown *status*.
+    #[allow(clippy::match_same_arms)]
+    pub fn from_run(status: &str, conclusion: Option<&str>) -> Self {
         match (status, conclusion) {
-            ("completed", Some("success")) => Badge::Pass,
-            ("completed", Some("failure")) => Badge::Fail,
-            ("completed", Some("cancelled")) => Badge::Cancelled,
-            ("completed", Some("skipped")) => Badge::Skipped,
-            ("completed", Some("timed_out")) => Badge::Fail,
-            ("completed", Some(other)) => Badge::Other(other.to_string()),
-            ("in_progress", _) => Badge::Running,
-            ("queued", _) => Badge::Queued,
-            ("pending", _) | ("waiting", _) | ("requested", _) => Badge::Pending,
-            (other, _) => Badge::Other(other.to_string()),
+            ("completed", Some("success")) => Self::Pass,
+            ("completed", Some("failure" | "timed_out")) => Self::Fail,
+            ("completed", Some("cancelled")) => Self::Cancelled,
+            ("completed", Some("skipped")) => Self::Skipped,
+            ("completed", Some(other)) => Self::Other(other.to_string()),
+            ("in_progress", _) => Self::Running,
+            ("queued", _) => Self::Queued,
+            ("pending" | "waiting" | "requested", _) => Self::Pending,
+            (other, _) => Self::Other(other.to_string()),
         }
     }
 
     /// Short label rendered in the Status column.
     pub fn label(&self) -> &str {
         match self {
-            Badge::Pass => "pass",
-            Badge::Fail => "FAIL",
-            Badge::Running => "running",
-            Badge::Queued => "queued",
-            Badge::Pending => "pending",
-            Badge::Cancelled => "cancelled",
-            Badge::Skipped => "skipped",
-            Badge::Other(s) => s,
+            Self::Pass => "pass",
+            Self::Fail => "FAIL",
+            Self::Running => "running",
+            Self::Queued => "queued",
+            Self::Pending => "pending",
+            Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
+            Self::Other(s) => s,
         }
     }
 
     pub fn is_failure(&self) -> bool {
-        matches!(self, Badge::Fail)
+        matches!(self, Self::Fail)
     }
 
     pub fn is_success(&self) -> bool {
-        matches!(self, Badge::Pass)
+        matches!(self, Self::Pass)
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Badge::Running | Badge::Queued | Badge::Pending)
+        matches!(self, Self::Running | Self::Queued | Self::Pending)
     }
 }
 

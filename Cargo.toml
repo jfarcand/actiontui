@@ -3,7 +3,7 @@ name = "actiontui"
 version = "0.1.0"
 edition = "2024"
 description = "A Ratatui terminal dashboard for watching GitHub Actions workflow runs"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/jfarcand/actiontui"
 authors = ["jfarcand"]
 readme = "README.md"
@@ -11,7 +11,6 @@ keywords = ["github", "actions", "ci", "tui", "ratatui"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-anyhow = "1.0.102"
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
@@ -29,3 +28,23 @@ toml = "1.1.2"
 opt-level = 3
 lto = "thin"
 strip = true
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+missing_const_for_fn = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+significant_drop_tightening = "allow"

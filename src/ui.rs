@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Pure rendering: turn fetched results into styled Ratatui lines. The same
 //! output drives both the one-shot snapshot and the live watch TUI.
 
@@ -55,8 +55,7 @@ fn badge_style(b: &Badge) -> Style {
     match b {
         Badge::Pass => Style::default().fg(Color::Green),
         Badge::Fail => bold(Color::Red),
-        Badge::Running => Style::default().fg(Color::Yellow),
-        Badge::Queued | Badge::Pending => Style::default().fg(Color::Yellow),
+        Badge::Running | Badge::Queued | Badge::Pending => Style::default().fg(Color::Yellow),
         _ => dim(),
     }
 }
@@ -409,7 +408,7 @@ fn text_cell(s: &str, style: Style) -> (Vec<Span<'static>>, usize) {
     text_cell_w(s, 64, style)
 }
 
-/// A single-span text cell truncated to `w` columns. Returns (spans, content_width).
+/// A single-span text cell truncated to `w` columns. Returns (spans, `content_width`).
 fn text_cell_w(s: &str, w: usize, style: Style) -> (Vec<Span<'static>>, usize) {
     let t = truncate(s, w);
     let len = t.chars().count();
@@ -448,10 +447,10 @@ fn border(widths: &[usize], left: char, mid: char, right: char) -> Line<'static>
 
 // ── formatting ───────────────────────────────────────────────────
 fn fmt_time(t: Option<DateTime<Utc>>) -> String {
-    match t {
-        Some(t) => t.with_timezone(&Local).format("%m-%d %H:%M:%S").to_string(),
-        None => "--".to_string(),
-    }
+    t.map_or_else(
+        || "--".to_string(),
+        |t| t.with_timezone(&Local).format("%m-%d %H:%M:%S").to_string(),
+    )
 }
 
 fn fmt_duration(secs: i64) -> String {
@@ -467,6 +466,7 @@ fn fmt_duration(secs: i64) -> String {
 
 /// Render lines to an ANSI-colored string for one-shot (non-TUI) output.
 pub fn lines_to_ansi(lines: &[Line]) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     for line in lines {
         for span in &line.spans {
@@ -474,7 +474,7 @@ pub fn lines_to_ansi(lines: &[Line]) -> String {
             if codes.is_empty() {
                 out.push_str(&span.content);
             } else {
-                out.push_str(&format!("\x1b[{codes}m{}\x1b[0m", span.content));
+                let _ = write!(out, "\x1b[{codes}m{}\x1b[0m", span.content);
             }
         }
         out.push('\n');
@@ -659,7 +659,7 @@ fn stats_row(row: &StatsRow, repo_w: usize, selected: bool) -> Line<'static> {
 
 /// Right-justified numeric value cell.
 fn value_cell(v: i64) -> (Vec<Span<'static>>, usize) {
-    let t = format!("{v:>w$}", w = W_VAL);
+    let t = format!("{v:>W_VAL$}");
     let len = t.chars().count().min(W_VAL);
     (
         vec![Span::styled(t, Style::default().fg(Color::White))],
@@ -669,19 +669,14 @@ fn value_cell(v: i64) -> (Vec<Span<'static>>, usize) {
 
 /// Day-over-day delta cell: ▲ green up, ▼ red down, · dim flat, "new" if no prior.
 fn delta_cell(cur: i64, prev: Option<i64>) -> (Vec<Span<'static>>, usize) {
-    let (text, color) = match prev {
-        None => ("new".to_string(), Color::DarkGray),
-        Some(p) => {
-            let d = cur - p;
-            if d > 0 {
-                (format!("▲{d}"), Color::Green)
-            } else if d < 0 {
-                (format!("▼{}", -d), Color::Red)
-            } else {
-                ("·".to_string(), Color::DarkGray)
-            }
-        }
-    };
+    let (text, color) = prev.map_or_else(
+        || ("new".to_string(), Color::DarkGray),
+        |p| match (cur - p).cmp(&0) {
+            std::cmp::Ordering::Greater => (format!("▲{}", cur - p), Color::Green),
+            std::cmp::Ordering::Less => (format!("▼{}", p - cur), Color::Red),
+            std::cmp::Ordering::Equal => ("·".to_string(), Color::DarkGray),
+        },
+    );
     let t = truncate(&text, W_DELTA);
     let len = t.chars().count();
     (vec![Span::styled(t, Style::default().fg(color))], len)
@@ -710,8 +705,8 @@ fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'st
         .collect();
     let vals: Vec<i64> = pts.iter().map(|(_, v)| *v).collect();
     let n = vals.len();
-    let minv = *vals.iter().min().unwrap();
-    let maxv = *vals.iter().max().unwrap();
+    let minv = vals.iter().copied().min().unwrap_or(0);
+    let maxv = vals.iter().copied().max().unwrap_or(0);
     let lw = digits(maxv).max(digits(minv));
 
     let mut lines = vec![Line::from(vec![

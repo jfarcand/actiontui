@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Pre-commit: require an SPDX header on every staged Rust file.
 
 set -e

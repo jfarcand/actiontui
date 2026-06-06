@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Persisted last-known conclusions, for green↔red transition detection.
 
 use std::collections::HashMap;
@@ -23,12 +23,12 @@ pub enum Transition {
 }
 
 impl State {
-    pub fn load(path: &Path) -> State {
+    pub fn load(path: &Path) -> Self {
         let store = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        State {
+        Self {
             path: path.to_path_buf(),
             store,
         }

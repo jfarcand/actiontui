@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Install this repo's git hooks (run once after cloning).
 
 set -e

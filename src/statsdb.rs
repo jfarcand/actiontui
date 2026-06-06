@@ -1,13 +1,13 @@
-// SPDX-License-Identifier: MIT
-//! SQLite persistence for repo stats — one row per (repo, UTC date), so we
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! `SQLite` persistence for repo stats — one row per (repo, UTC date), so we
 //! accumulate long-term history GitHub itself doesn't keep (no stars/forks
 //! history API; traffic only spans 14 days).
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use crate::error::{Error, Result};
 use crate::model::Snapshot;
 
 pub struct StatsDb {
@@ -15,9 +15,9 @@ pub struct StatsDb {
 }
 
 impl StatsDb {
-    pub fn open(path: &Path) -> Result<StatsDb> {
+    pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
-            .with_context(|| format!("opening stats db at {}", path.display()))?;
+            .map_err(|e| Error::Db(format!("opening stats db at {}: {e}", path.display())))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS stats (
                  repo     TEXT NOT NULL,
@@ -30,8 +30,8 @@ impl StatsDb {
                  PRIMARY KEY (repo, date)
              );",
         )
-        .context("initializing stats schema")?;
-        Ok(StatsDb { conn })
+        .map_err(|e| Error::Db(format!("initializing stats schema: {e}")))?;
+        Ok(Self { conn })
     }
 
     /// Upsert today's snapshot for a repo.
@@ -85,6 +85,7 @@ impl StatsDb {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::path::Path;

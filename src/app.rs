@@ -1,11 +1,10 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Watch-mode TUI: a live, alt-screen dashboard with background refresh,
 //! spinner animation, keyboard control, and a hard auto-exit ceiling.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use chrono::{Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
@@ -15,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tokio::sync::mpsc;
 
+use crate::error::Result;
 use crate::model::{RepoResult, RepoStats, StatsRow};
 use crate::state::State;
 use crate::statsdb::StatsDb;
@@ -96,9 +96,9 @@ impl App {
         state: State,
         statsdb: StatsDb,
         start_stats: bool,
-    ) -> App {
+    ) -> Self {
         let now = Instant::now();
-        App {
+        Self {
             octo: Arc::new(octo),
             repos,
             branch,
@@ -303,23 +303,18 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         // A pending re-run confirmation swallows input until answered.
-        if self.confirm.is_some() {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    let c = self.confirm.take().unwrap();
-                    match rerun(&c.repo, c.run_id) {
-                        Ok(()) => {
-                            self.status =
-                                Some(format!("⟳ re-run triggered — {} ({})", c.workflow, c.repo));
-                            self.trigger_refresh(tx);
-                        }
-                        Err(e) => self.status = Some(format!("✗ re-run failed: {e}")),
+        if let Some(c) = self.confirm.take() {
+            if let KeyCode::Char('y' | 'Y') = key.code {
+                match rerun(&c.repo, c.run_id) {
+                    Ok(()) => {
+                        self.status =
+                            Some(format!("⟳ re-run triggered — {} ({})", c.workflow, c.repo));
+                        self.trigger_refresh(tx);
                     }
+                    Err(e) => self.status = Some(format!("✗ re-run failed: {e}")),
                 }
-                _ => {
-                    self.confirm = None;
-                    self.status = Some("re-run cancelled".into());
-                }
+            } else {
+                self.status = Some("re-run cancelled".into());
             }
             return true;
         }
@@ -350,7 +345,7 @@ impl App {
                 }
             }
 
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            KeyCode::Char('r' | 'R') => {
                 if !self.loading {
                     self.refresh_active(tx);
                 }
@@ -455,7 +450,8 @@ pub async fn fetch_stats_all(octo: &Octocrab, repos: &[String]) -> Vec<RepoStats
 }
 
 /// Trigger a re-run of a workflow run via `gh api` (reuses gh's auth + scopes).
-fn rerun(repo: &str, run_id: u64) -> Result<(), String> {
+/// Returns a human message string on failure (shown in the status line).
+fn rerun(repo: &str, run_id: u64) -> std::result::Result<(), String> {
     let out = std::process::Command::new("gh")
         .args([
             "api",

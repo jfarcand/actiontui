@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! actiontui — a Ratatui dashboard for GitHub Actions workflow runs.
 
 mod app;
 mod cli;
 mod config;
+mod error;
 mod github;
 mod model;
 mod notify;
@@ -13,13 +14,13 @@ mod ui;
 
 use std::io::IsTerminal;
 
-use anyhow::{Result, bail};
 use chrono::Local;
 use clap::Parser;
 
 use crate::app::App;
 use crate::cli::Cli;
 use crate::config::{FileConfig, Paths, Settings};
+use crate::error::{Error, Result};
 use crate::state::State;
 use crate::ui::Frame;
 
@@ -45,9 +46,9 @@ async fn main() -> Result<()> {
     match settings.watch {
         Some(interval) => {
             if !std::io::stdout().is_terminal() {
-                bail!(
-                    "watch mode needs an interactive terminal — run without -w to print a one-shot table"
-                );
+                return Err(Error::Config(
+                    "watch mode needs an interactive terminal — run without -w to print a one-shot table".into(),
+                ));
             }
             let state = State::load(&paths.state_file);
             let statsdb = statsdb::StatsDb::open(&paths.stats_db)?;

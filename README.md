@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jfarcand/actiontui/actions/workflows/ci.yml/badge.svg)](https://github.com/jfarcand/actiontui/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/actiontui.svg)](https://crates.io/crates/actiontui)
-[![license](https://img.shields.io/crates/l/actiontui.svg)](LICENSE)
+[![license](https://img.shields.io/crates/l/actiontui.svg)](#license)
 
 **actiontui** is a terminal dashboard for **GitHub Actions**, built with [Ratatui](https://ratatui.rs). It watches workflow runs across one or many repositories and turns the noise of CI into a single glanceable screen — with live status, run-history dots, ETA estimates for in-flight runs, and desktop notifications (with sound) the moment a workflow turns red or recovers.
 
@@ -112,21 +112,30 @@ exclude = ["Update #", "in /."]   # drops Dependabot version-update runs
 
 ## How it works
 
-For each repo, actiontui fetches one page (100) of workflow runs for the branch plus the list of active workflows, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the failing-since commit (oldest run of the current consecutive-failure streak), and the ETA (most recent successful run's wall-clock duration). State transitions are detected by diffing against the persisted `state.json`.
+For each repo, actiontui fetches one page (100) of workflow runs for the branch plus the list of active workflows, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the head commit, and the ETA (most recent successful run's wall-clock duration). State transitions are detected by diffing against the persisted `state.json`. The Stats view fetches each repo's metrics and writes a daily snapshot to SQLite, computing deltas against the most recent prior day.
+
+## Development
+
+```sh
+git clone https://github.com/jfarcand/actiontui && cd actiontui
+./scripts/setup-hooks.sh    # install pre-commit / commit-msg / pre-push hooks
+cargo build
+cargo test
+```
+
+The hooks (in `.build/hooks`) gate work the way CI does:
+
+- **pre-commit** — every `.rs` file must carry an SPDX header.
+- **commit-msg** — max 2 lines, no AI attribution; use a conventional prefix (`feat:`/`fix:`/`docs:`/`ci:`/`chore:`).
+- **pre-push** — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+
+Lints are strict (`clippy::all`/`pedantic`/`nursery` at deny, `unwrap`/`expect`/`panic` denied in non-test code). See [`CLAUDE.md`](CLAUDE.md) for the full conventions.
 
 ## Releasing
 
 CI (`.github/workflows/ci.yml`) runs fmt + clippy + build + test on every push and PR.
 
-Publishing to [crates.io](https://crates.io) is automated by `.github/workflows/release.yml` — push a version tag and it verifies the tag matches `Cargo.toml`, builds, and publishes:
-
-```sh
-# bump version in Cargo.toml first, then:
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Requires a repository secret `CARGO_REGISTRY_TOKEN` (a crates.io API token from <https://crates.io/settings/tokens>).
+Releases are cut from the **Actions → Release** workflow: pick a version bump (patch/minor/major) and it bumps `Cargo.toml`, updates `CHANGELOG.md`, tags, builds Linux/macOS/Windows binaries, publishes to [crates.io](https://crates.io), and creates the GitHub release with the binaries attached. Requires a repository secret `CARGO_REGISTRY_TOKEN` (a crates.io API token).
 
 ## Roadmap
 
@@ -138,5 +147,9 @@ Recently shipped: clickable commit SHA, on-demand notification/sound test, and r
 
 ## License
 
-MIT
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option. Unless you explicitly state
+otherwise, any contribution intentionally submitted for inclusion in this work,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.
 

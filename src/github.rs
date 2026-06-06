@@ -1,15 +1,15 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! GitHub REST access via octocrab. One page of runs per repo is fetched and
 //! everything (latest-per-workflow, recent history, fail-since, ETA) is derived
 //! client-side — far fewer API calls than the original per-workflow approach.
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 use serde::Deserialize;
 
+use crate::error::{Error, Result};
 use crate::model::{Badge, Dot, RepoResult, RepoStats, Snapshot, WorkflowRow};
 
 const RECENT_COUNT: usize = 6;
@@ -56,14 +56,17 @@ struct ApiWorkflow {
 }
 
 /// Build an authenticated client, pulling the token from `gh auth token`
-/// (falls back to GITHUB_TOKEN / GH_TOKEN).
+/// (falls back to `GITHUB_TOKEN` / `GH_TOKEN`).
 pub fn build_client() -> Result<Octocrab> {
-    let token = gh_token()
-        .context("no GitHub token found — run `gh auth login`, or set GITHUB_TOKEN/GH_TOKEN")?;
+    let token = gh_token().ok_or_else(|| {
+        Error::GitHub(
+            "no GitHub token found — run `gh auth login`, or set GITHUB_TOKEN/GH_TOKEN".into(),
+        )
+    })?;
     Octocrab::builder()
         .personal_token(token)
         .build()
-        .context("failed to build GitHub client")
+        .map_err(|e| Error::GitHub(format!("failed to build GitHub client: {e}")))
 }
 
 fn gh_token() -> Option<String> {
@@ -104,7 +107,7 @@ pub async fn fetch_repo(
         Err(e) => RepoResult {
             repo: repo.to_string(),
             rows: Vec::new(),
-            error: Some(format!("{e:#}")),
+            error: Some(e.to_string()),
         },
     }
 }
@@ -124,7 +127,7 @@ async fn fetch_repo_inner(
     let resp: RunsResponse = octo
         .get(&runs_route, None::<&()>)
         .await
-        .with_context(|| format!("fetching runs for {repo}"))?;
+        .map_err(|e| Error::GitHub(format!("fetching runs for {repo}: {e}")))?;
 
     // Group runs by workflow, filtering to active workflows when we know them.
     let mut groups: HashMap<u64, Vec<ApiRun>> = HashMap::new();
@@ -199,7 +202,7 @@ pub async fn fetch_stats(octo: &Octocrab, repo: &str) -> RepoStats {
         Err(e) => RepoStats {
             repo: repo.to_string(),
             snapshot: Snapshot::default(),
-            error: Some(format!("{e:#}")),
+            error: Some(e.to_string()),
         },
     }
 }
@@ -208,7 +211,7 @@ async fn fetch_stats_inner(octo: &Octocrab, repo: &str) -> Result<(String, Snaps
     let info: RepoInfo = octo
         .get(&format!("/repos/{repo}"), None::<&()>)
         .await
-        .with_context(|| format!("fetching repo {repo}"))?;
+        .map_err(|e| Error::GitHub(format!("fetching repo {repo}: {e}")))?;
 
     let prs = open_pr_count(octo, &info.full_name).await.unwrap_or(0);
     let issues = (info.open_issues_count - prs).max(0);
@@ -265,13 +268,16 @@ fn recent_dots(group: &[ApiRun]) -> Vec<Dot> {
 
 /// Minimal URL-encoding for branch names (handles `/`, spaces, `#`, etc.).
 fn urlencode(s: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
+                out.push(b as char);
             }
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
         }
     }
     out
