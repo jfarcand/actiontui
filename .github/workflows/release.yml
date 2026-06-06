@@ -1,8 +1,13 @@
 name: Release
 
 # Cut a release from the Actions tab: pick a version bump and this will
-# bump Cargo.toml, update the changelog, tag, build cross-platform binaries,
-# publish to crates.io, and create a GitHub release with the binaries attached.
+# bump Cargo.toml, update the changelog, tag, publish to crates.io, create a
+# GitHub release, and attach cross-platform binaries as each one finishes.
+#
+# Design note: crates.io publishing depends ONLY on the version job — never on
+# the binary builds. A scarce/flaky platform runner can delay or omit one binary
+# but can NOT block the crate from publishing. Binaries attach themselves to the
+# release independently.
 #
 # Requires a repository secret CARGO_REGISTRY_TOKEN (a crates.io API token).
 
@@ -71,27 +76,19 @@ jobs:
           DATE=$(date +%Y-%m-%d)
           RANGE="HEAD"; [ -n "$PREV_TAG" ] && RANGE="${PREV_TAG}..HEAD"
 
-          FEATURES=""; FIXES=""; OTHER=""
+          ENTRIES=""
           while IFS= read -r msg; do
             [ -z "$msg" ] && continue
-            case "$msg" in
-              feat:*|feat\(*) FEATURES="${FEATURES}- ${msg}\n" ;;
-              fix:*|fix\(*)   FIXES="${FIXES}- ${msg}\n" ;;
-              docs:*|chore:*|test:*|ci:*|release:*) ;;
-              *) OTHER="${OTHER}- ${msg}\n" ;;
-            esac
+            ENTRIES="${ENTRIES}- ${msg}\n"
           done < <(git log "${RANGE}" --pretty=format:"%s" --no-merges)
-
-          BODY=""
-          [ -n "$FEATURES" ] && BODY="${BODY}### Added\n\n${FEATURES}\n"
-          [ -n "$FIXES" ]    && BODY="${BODY}### Fixed\n\n${FIXES}\n"
-          [ -n "$OTHER" ]    && BODY="${BODY}### Other\n\n${OTHER}\n"
-          HEADER="## [${VERSION}] — ${DATE}"
+          [ -z "$ENTRIES" ] && ENTRIES="- Maintenance release.\n"
 
           TMPFILE=$(mktemp)
-          echo "# Changelog" > "$TMPFILE"; echo "" >> "$TMPFILE"
-          echo "$HEADER" >> "$TMPFILE"; echo "" >> "$TMPFILE"
-          echo -e "$BODY" >> "$TMPFILE"
+          {
+            echo "# Changelog"; echo ""
+            echo "## [${VERSION}] — ${DATE}"; echo ""
+            echo -e "$ENTRIES"
+          } > "$TMPFILE"
           if [ -f CHANGELOG.md ]; then tail -n +2 CHANGELOG.md >> "$TMPFILE"; fi
           mv "$TMPFILE" CHANGELOG.md
 
@@ -103,9 +100,48 @@ jobs:
           git tag "v${VERSION}"
           git push origin HEAD --tags
 
-  build:
-    name: Build (${{ matrix.target }})
+  publish:
+    name: Publish crate + release
     needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # Let the benign "already uploaded" error through (re-runs after a
+        # partial publish) while failing the job on every other error.
+        run: |
+          set -euo pipefail
+          if cargo publish --locked 2>&1 | tee /tmp/publish.log; then
+            exit 0
+          fi
+          if grep -q "is already uploaded" /tmp/publish.log; then
+            echo "::warning::version already on crates.io — skipping"
+            exit 0
+          fi
+          echo "::error::cargo publish failed"
+          exit 1
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          body_path: CHANGELOG.md
+
+  # Binaries attach to the release as each finishes; a missing platform never
+  # blocks the crate publish or the release itself.
+  binaries:
+    name: Binary (${{ matrix.target }})
+    needs: [version, publish]
     strategy:
       fail-fast: false
       matrix:
@@ -159,52 +195,10 @@ jobs:
           Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE "$DIR/"
           Compress-Archive -Path "$DIR/*" -DestinationPath "${DIR}.zip"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: actiontui-${{ matrix.target }}
-          path: actiontui-v*.*
-          retention-days: 7
-
-  publish:
-    name: Publish
-    needs: [version, build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.version.outputs.version }}
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.94.0"
-
-      - name: Publish to crates.io
+      - name: Attach binary to release
+        shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        # Let the benign "already uploaded" error through (re-runs after a
-        # partial publish) while failing the job on every other error.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          if cargo publish --locked 2>&1 | tee /tmp/publish.log; then
-            exit 0
-          fi
-          if grep -q "is already uploaded" /tmp/publish.log; then
-            echo "::warning::version already on crates.io — skipping"
-            exit 0
-          fi
-          echo "::error::cargo publish failed"
-          exit 1
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: actiontui-*
-          merge-multiple: true
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.version.outputs.version }}
-          name: v${{ needs.version.outputs.version }}
-          body_path: CHANGELOG.md
-          files: artifacts/*
+          gh release upload "v${{ needs.version.outputs.version }}" actiontui-v*.* \
+            --clobber --repo "${{ github.repository }}"
