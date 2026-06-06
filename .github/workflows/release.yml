@@ -1,43 +1,205 @@
 name: Release
 
-# Publishes to crates.io when a version tag is pushed, e.g.:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Cut a release from the Actions tab: pick a version bump and this will
+# bump Cargo.toml, update the changelog, tag, build cross-platform binaries,
+# publish to crates.io, and create a GitHub release with the binaries attached.
 #
-# Requires a repository secret CARGO_REGISTRY_TOKEN (crates.io API token).
+# Requires a repository secret CARGO_REGISTRY_TOKEN (a crates.io API token).
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    name: Bump & tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          VERSION="${major}.${minor}.${patch}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Bumping ${CURRENT} → ${VERSION}"
+          sed -i "0,/^version = \"${CURRENT}\"/s//version = \"${VERSION}\"/" Cargo.toml
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Update lockfile
+        run: cargo update -p actiontui --precise "${{ steps.bump.outputs.version }}"
+
+      - name: Generate changelog
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          PREV_TAG="${{ steps.bump.outputs.prev_tag }}"
+          DATE=$(date +%Y-%m-%d)
+          RANGE="HEAD"; [ -n "$PREV_TAG" ] && RANGE="${PREV_TAG}..HEAD"
+
+          FEATURES=""; FIXES=""; OTHER=""
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            case "$msg" in
+              feat:*|feat\(*) FEATURES="${FEATURES}- ${msg}\n" ;;
+              fix:*|fix\(*)   FIXES="${FIXES}- ${msg}\n" ;;
+              docs:*|chore:*|test:*|ci:*|release:*) ;;
+              *) OTHER="${OTHER}- ${msg}\n" ;;
+            esac
+          done < <(git log "${RANGE}" --pretty=format:"%s" --no-merges)
+
+          BODY=""
+          [ -n "$FEATURES" ] && BODY="${BODY}### Added\n\n${FEATURES}\n"
+          [ -n "$FIXES" ]    && BODY="${BODY}### Fixed\n\n${FIXES}\n"
+          [ -n "$OTHER" ]    && BODY="${BODY}### Other\n\n${OTHER}\n"
+          HEADER="## [${VERSION}] — ${DATE}"
+
+          TMPFILE=$(mktemp)
+          echo "# Changelog" > "$TMPFILE"; echo "" >> "$TMPFILE"
+          echo "$HEADER" >> "$TMPFILE"; echo "" >> "$TMPFILE"
+          echo -e "$BODY" >> "$TMPFILE"
+          if [ -f CHANGELOG.md ]; then tail -n +2 CHANGELOG.md >> "$TMPFILE"; fi
+          mv "$TMPFILE" CHANGELOG.md
+
+      - name: Commit, tag, push
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          git add -A
+          git commit -m "release: v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD --tags
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          DIR="actiontui-v${VERSION}-${{ matrix.target }}"
+          mkdir "$DIR"
+          cp "target/${{ matrix.target }}/release/actiontui" "$DIR/"
+          cp README.md LICENSE "$DIR/"
+          tar czf "${DIR}.tar.gz" "$DIR"
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ needs.version.outputs.version }}"
+          $DIR = "actiontui-v${VERSION}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $DIR | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/actiontui.exe" "$DIR/"
+          Copy-Item README.md, LICENSE "$DIR/"
+          Compress-Archive -Path "$DIR/*" -DestinationPath "${DIR}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: actiontui-${{ matrix.target }}
+          path: actiontui-v*.*
+          retention-days: 7
+
   publish:
-    name: Publish to crates.io
+    name: Publish
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Verify tag matches Cargo.toml version
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # Let the benign "already uploaded" error through (re-runs after a
+        # partial publish) while failing the job on every other error.
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          crate="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          echo "tag=$tag  Cargo.toml=$crate"
-          if [ "$tag" != "$crate" ]; then
-            echo "::error::tag v$tag does not match Cargo.toml version $crate"
-            exit 1
+          set -euo pipefail
+          if cargo publish --locked 2>&1 | tee /tmp/publish.log; then
+            exit 0
           fi
+          if grep -q "is already uploaded" /tmp/publish.log; then
+            echo "::warning::version already on crates.io — skipping"
+            exit 0
+          fi
+          echo "::error::cargo publish failed"
+          exit 1
 
-      - name: Verify package builds
-        run: cargo build --locked --release
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: actiontui-*
+          merge-multiple: true
 
-      - name: Publish
-        run: cargo publish --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          body_path: CHANGELOG.md
+          files: artifacts/*

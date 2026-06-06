@@ -4,9 +4,11 @@
 [![crates.io](https://img.shields.io/crates/v/actiontui.svg)](https://crates.io/crates/actiontui)
 [![license](https://img.shields.io/crates/l/actiontui.svg)](LICENSE)
 
-A [Ratatui](https://ratatui.rs) terminal dashboard for watching **GitHub Actions** workflow runs across one or more repositories — with a live-refreshing TUI, recent-history sparkdots, ETA estimates, and desktop notifications (with sound) when CI turns red or recovers.
+**actiontui** is a terminal dashboard for **GitHub Actions**, built with [Ratatui](https://ratatui.rs). It watches workflow runs across one or many repositories and turns the noise of CI into a single glanceable screen — with live status, run-history dots, ETA estimates for in-flight runs, and desktop notifications (with sound) the moment a workflow turns red or recovers.
 
-It's a Rust rewrite of a shell tool, built for a richer terminal experience: animated spinners, colored status badges, a "Recent" run-history column, and an alt-screen watch mode with bounded memory.
+It runs two ways: a **one-shot snapshot** printed to your terminal (pipeable, with clickable commit links), or a **live watch mode** — an alt-screen TUI that refreshes in the background where you can re-run a workflow, open its commit, and flip to a **Stats view** charting each repo's star history over time.
+
+Why it exists: checking a dozen repos' Actions tabs by hand is tedious, GitHub's own UI has no cross-repo overview, and its traffic/stats history is thrown away after 14 days. actiontui watches everything at once, notifies you on failures, and persists stats to a local SQLite database so the trend keeps growing. It's a Rust rewrite of a shell tool, rebuilt for a richer terminal experience: animated spinners, colored status badges, and bounded-memory rendering for long-running watches.
 
 ```
   GitHub Actions  2026-06-05 17:07:16
@@ -39,9 +41,9 @@ It's a Rust rewrite of a shell tool, built for a richer terminal experience: ani
 Requires the [`gh`](https://cli.github.com) CLI authenticated (`gh auth login`) — actiontui pulls its token from `gh auth token`, or from `GH_TOKEN`/`GITHUB_TOKEN`.
 
 ```sh
+cargo install actiontui
+# or from a checkout:
 cargo install --path .
-# or, after publishing:
-# cargo install actiontui
 ```
 
 ## Usage
