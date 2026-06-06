@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Commit message format: max 2 lines, no AI attribution.
+
+MSG_FILE="$1"
+MSG=$(cat "$MSG_FILE")
+LINE_COUNT=$(echo "$MSG" | grep -vc '^#')
+
+if [ "$LINE_COUNT" -gt 2 ]; then
+    echo "❌ Commit message too long: $LINE_COUNT lines (max 2)."
+    echo "   Line 1: brief summary (conventional prefix: feat/fix/docs/ci/chore)."
+    echo "   Line 2: optional detail."
+    exit 1
+fi
+
+if echo "$MSG" | grep -qiE "Co-Authored-By.*(claude|anthropic)|Generated with|🤖"; then
+    echo "❌ AI-generated commit signatures are not allowed."
+    exit 1
+fi
+
+echo "✅ commit message OK ($LINE_COUNT line(s))"

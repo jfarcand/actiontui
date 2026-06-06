@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Persisted last-known conclusions, for green↔red transition detection.
 
 use std::collections::HashMap;

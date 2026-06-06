@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! SQLite persistence for repo stats — one row per (repo, UTC date), so we
 //! accumulate long-term history GitHub itself doesn't keep (no stars/forks
 //! history API; traffic only spans 14 days).

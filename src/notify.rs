@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Desktop notifications + sound on CI status transitions (macOS-focused,
 //! degrades to a terminal bell elsewhere).
 

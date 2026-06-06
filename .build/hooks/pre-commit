@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pre-commit: require an SPDX header on every staged Rust file.
+
+set -e
+
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+for f in $STAGED_RS; do
+    [ -f "$f" ] || continue
+    if ! head -5 "$f" | grep -q "SPDX-License-Identifier:"; then
+        echo "❌ Missing SPDX header: $f"
+        echo "   Add as the first line: // SPDX-License-Identifier: MIT"
+        exit 1
+    fi
+done
+
+echo "✅ pre-commit OK"

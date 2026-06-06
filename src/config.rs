@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Config + settings resolution.
 //!
 //! Effective settings come from three layers, highest priority first:

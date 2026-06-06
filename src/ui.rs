@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure rendering: turn fetched results into styled Ratatui lines. The same
 //! output drives both the one-shot snapshot and the live watch TUI.
 

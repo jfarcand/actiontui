@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Domain types shared across fetching, state, and rendering.
 
 use chrono::{DateTime, Utc};

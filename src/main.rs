@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! actiontui — a Ratatui dashboard for GitHub Actions workflow runs.
 
 mod app;

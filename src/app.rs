@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Watch-mode TUI: a live, alt-screen dashboard with background refresh,
 //! spinner animation, keyboard control, and a hard auto-exit ceiling.
 

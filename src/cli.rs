@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Command-line interface (mirrors the original `ghactions` flags).
 
 use clap::Parser;

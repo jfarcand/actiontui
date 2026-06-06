@@ -1,0 +1,34 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pre-push: format + clippy + tests for actiontui (single-crate gate).
+# Heavy/long checks belong in CI; this is the fast local guard.
+
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+[ ! -f "$ROOT/Cargo.toml" ] && exit 0
+cd "$ROOT"
+
+echo "Pre-push: cargo fmt --check..."
+if ! cargo fmt --all -- --check; then
+    echo "BLOCKED: code not formatted. Run: cargo fmt --all"
+    exit 1
+fi
+
+echo "Pre-push: cargo clippy --all-targets -- -D warnings..."
+if ! cargo clippy --all-targets -- -D warnings; then
+    echo "BLOCKED: clippy failed. Fix all warnings before pushing."
+    exit 1
+fi
+
+echo "Pre-push: cargo test..."
+if ! cargo test --quiet; then
+    echo "BLOCKED: tests failed."
+    exit 1
+fi
+
+echo "Pre-push: OK"
+echo ""
+echo "REMINDER: a push is the START of validation, not the end. Monitor CI"
+echo "until it is green on the pushed commit — see CLAUDE.md →"
+echo "'After Pushing — MANDATORY CI MONITORING'."
