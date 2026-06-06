@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! actiontui — a Ratatui dashboard for GitHub Actions workflow runs.
 
 mod app;

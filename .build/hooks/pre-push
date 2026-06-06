@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Pre-push: format + clippy + tests for actiontui (single-crate gate).
 # Heavy/long checks belong in CI; this is the fast local guard.
 

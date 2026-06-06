@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Watch-mode TUI: a live, alt-screen dashboard with background refresh,
 //! spinner animation, keyboard control, and a hard auto-exit ceiling.
 

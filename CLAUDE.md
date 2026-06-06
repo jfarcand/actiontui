@@ -29,7 +29,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Every `.rs` file starts with `// SPDX-License-Identifier: MIT` (pre-commit checks it).
+Every `.rs` file starts with `// SPDX-License-Identifier: Apache-2.0` (pre-commit checks it).
 
 ## After Pushing — MANDATORY CI MONITORING
 

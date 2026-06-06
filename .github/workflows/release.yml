@@ -181,7 +181,7 @@ jobs:
           DIR="actiontui-v${VERSION}-${{ matrix.target }}"
           mkdir "$DIR"
           cp "target/${{ matrix.target }}/release/actiontui" "$DIR/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$DIR/"
+          cp README.md LICENSE "$DIR/"
           tar czf "${DIR}.tar.gz" "$DIR"
 
       - name: Package (Windows)
@@ -192,7 +192,7 @@ jobs:
           $DIR = "actiontui-v${VERSION}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $DIR | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/actiontui.exe" "$DIR/"
-          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE "$DIR/"
+          Copy-Item README.md, LICENSE "$DIR/"
           Compress-Archive -Path "$DIR/*" -DestinationPath "${DIR}.zip"
 
       - name: Attach binary to release

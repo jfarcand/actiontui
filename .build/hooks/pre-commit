@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Pre-commit: require an SPDX header on every staged Rust file.
 
 set -e
@@ -9,7 +9,7 @@ for f in $STAGED_RS; do
     [ -f "$f" ] || continue
     if ! head -5 "$f" | grep -q "SPDX-License-Identifier:"; then
         echo "❌ Missing SPDX header: $f"
-        echo "   Add as the first line: // SPDX-License-Identifier: MIT"
+        echo "   Add as the first line: // SPDX-License-Identifier: Apache-2.0"
         exit 1
     fi
 done

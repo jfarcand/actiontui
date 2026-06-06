@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Structured error type — replaces `anyhow` (per the clippy `disallowed-methods`
 //! policy). Foreign errors convert in via `From`, so `?` still works.
 

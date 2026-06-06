@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Persisted last-known conclusions, for green↔red transition detection.
 
 use std::collections::HashMap;

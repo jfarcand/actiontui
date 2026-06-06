@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! GitHub REST access via octocrab. One page of runs per repo is fetched and
 //! everything (latest-per-workflow, recent history, fail-since, ETA) is derived
 //! client-side — far fewer API calls than the original per-workflow approach.

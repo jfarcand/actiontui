@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Desktop notifications + sound on CI status transitions (macOS-focused,
 //! degrades to a terminal bell elsewhere).
 
