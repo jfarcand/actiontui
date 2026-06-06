@@ -7,6 +7,7 @@ mod github;
 mod model;
 mod notify;
 mod state;
+mod statsdb;
 mod ui;
 
 use std::io::IsTerminal;
@@ -48,6 +49,7 @@ async fn main() -> Result<()> {
                 );
             }
             let state = State::load(&paths.state_file);
+            let statsdb = statsdb::StatsDb::open(&paths.stats_db)?;
             let app = App::new(
                 octo,
                 settings.repos,
@@ -57,6 +59,8 @@ async fn main() -> Result<()> {
                 settings.exclude,
                 interval,
                 state,
+                statsdb,
+                settings.start_stats,
             );
             app.run().await
         }

@@ -17,6 +17,7 @@ pub struct Paths {
     pub state_file: PathBuf,
     pub repos_conf: PathBuf,
     pub config_toml: PathBuf,
+    pub stats_db: PathBuf,
 }
 
 impl Paths {
@@ -33,6 +34,7 @@ impl Paths {
             state_file: base.join("state.json"),
             repos_conf: base.join("repos.conf"),
             config_toml: base.join("config.toml"),
+            stats_db: base.join("stats.db"),
             config_dir: base,
         })
     }
@@ -82,6 +84,8 @@ pub struct Settings {
     pub sound: bool,
     /// Case-insensitive substrings; workflows matching any are hidden.
     pub exclude: Vec<String>,
+    /// Start the TUI in the Stats view.
+    pub start_stats: bool,
 }
 
 impl Settings {
@@ -97,11 +101,15 @@ impl Settings {
         let aggregate = cli.aggregate || file.aggregate.unwrap_or(false);
 
         // -w on the CLI wins; otherwise honor `watch = true` in config.
-        let watch = cli.watch.or_else(|| {
-            file.watch
-                .unwrap_or(false)
-                .then(|| file.interval.unwrap_or(60))
-        });
+        // --stats implies the TUI, so default an interval if none is set.
+        let watch = cli
+            .watch
+            .or_else(|| {
+                file.watch
+                    .unwrap_or(false)
+                    .then(|| file.interval.unwrap_or(60))
+            })
+            .or_else(|| cli.stats.then(|| file.interval.unwrap_or(60)));
 
         // --no-sound forces off; otherwise config, defaulting to on.
         let sound = !cli.no_sound && file.sound.unwrap_or(true);
@@ -120,6 +128,7 @@ impl Settings {
             watch,
             sound,
             exclude,
+            start_stats: cli.stats,
         })
     }
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use chrono::Local;
+use chrono::{Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use octocrab::Octocrab;
@@ -14,9 +14,23 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tokio::sync::mpsc;
 
-use crate::model::RepoResult;
+use crate::model::{RepoResult, RepoStats, StatsRow};
 use crate::state::State;
-use crate::ui::{self, Frame, WatchInfo};
+use crate::statsdb::StatsDb;
+use crate::ui::{self, Frame, StatsFrame, WatchInfo};
+
+/// Which view is on screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum View {
+    Ci,
+    Stats,
+}
+
+/// A background-fetch result delivered over the channel.
+enum Msg {
+    Ci(Vec<RepoResult>),
+    Stats(Vec<RepoStats>),
+}
 
 /// A selectable row, flattened across repos in render order.
 struct Sel {
@@ -53,7 +67,14 @@ pub struct App {
     started: Instant,
     state: State,
 
-    /// Index into the flattened selectable rows.
+    /// Active view (CI workflows or repo stats).
+    view: View,
+    /// Stats rows + persistence (lazily loaded the first time Stats is shown).
+    stats: Vec<StatsRow>,
+    stats_loaded: bool,
+    statsdb: StatsDb,
+
+    /// Index into the active view's rows.
     selected: usize,
     /// Pending re-run confirmation.
     confirm: Option<Confirm>,
@@ -72,6 +93,8 @@ impl App {
         exclude: Vec<String>,
         interval_secs: u64,
         state: State,
+        statsdb: StatsDb,
+        start_stats: bool,
     ) -> App {
         let now = Instant::now();
         App {
@@ -88,6 +111,10 @@ impl App {
             last_refresh: now,
             started: now,
             state,
+            view: if start_stats { View::Stats } else { View::Ci },
+            stats: Vec::new(),
+            stats_loaded: false,
+            statsdb,
             selected: 0,
             confirm: None,
             status: None,
@@ -104,9 +131,9 @@ impl App {
     async fn event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
         let mut events = EventStream::new();
         let mut tick = tokio::time::interval(Duration::from_millis(120));
-        let (tx, mut rx) = mpsc::channel::<Vec<RepoResult>>(4);
+        let (tx, mut rx) = mpsc::channel::<Msg>(4);
 
-        self.trigger_refresh(&tx);
+        self.refresh_active(&tx);
         self.draw(terminal)?;
 
         loop {
@@ -127,14 +154,17 @@ impl App {
                         self.spinner = self.spinner.wrapping_add(1);
                     }
                     if !self.loading && self.last_refresh.elapsed() >= self.interval {
-                        self.trigger_refresh(&tx);
+                        self.refresh_active(&tx);
                     }
                     if self.started.elapsed() >= MAX_WATCH {
                         break;
                     }
                 }
-                Some(results) = rx.recv() => {
-                    self.apply(results);
+                Some(msg) = rx.recv() => {
+                    match msg {
+                        Msg::Ci(results) => self.apply(results),
+                        Msg::Stats(stats) => self.apply_stats(stats),
+                    }
                 }
             }
             self.draw(terminal)?;
@@ -142,8 +172,16 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background fetch for all repos; results arrive over the channel.
-    fn trigger_refresh(&mut self, tx: &mpsc::Sender<Vec<RepoResult>>) {
+    /// Refresh whichever view is active.
+    fn refresh_active(&mut self, tx: &mpsc::Sender<Msg>) {
+        match self.view {
+            View::Ci => self.trigger_refresh(tx),
+            View::Stats => self.trigger_stats(tx),
+        }
+    }
+
+    /// Spawn a background CI fetch for all repos; results arrive over the channel.
+    fn trigger_refresh(&mut self, tx: &mpsc::Sender<Msg>) {
         self.loading = true;
         let octo = Arc::clone(&self.octo);
         let repos = self.repos.clone();
@@ -152,8 +190,78 @@ impl App {
         let tx = tx.clone();
         tokio::spawn(async move {
             let results = fetch_all(&octo, &repos, &branch, &exclude).await;
-            let _ = tx.send(results).await;
+            let _ = tx.send(Msg::Ci(results)).await;
         });
+    }
+
+    /// Spawn a background stats fetch for all repos.
+    fn trigger_stats(&mut self, tx: &mpsc::Sender<Msg>) {
+        self.loading = true;
+        let octo = Arc::clone(&self.octo);
+        let repos = self.repos.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let stats = fetch_stats_all(&octo, &repos).await;
+            let _ = tx.send(Msg::Stats(stats)).await;
+        });
+    }
+
+    /// Switch between the CI and Stats views, loading data on first entry.
+    fn toggle_view(&mut self, tx: &mpsc::Sender<Msg>) {
+        self.view = match self.view {
+            View::Ci => View::Stats,
+            View::Stats => View::Ci,
+        };
+        self.confirm = None;
+        self.selected = 0;
+        if self.loading {
+            return;
+        }
+        match self.view {
+            View::Stats if !self.stats_loaded => self.trigger_stats(tx),
+            View::Ci if self.results.is_empty() => self.trigger_refresh(tx),
+            _ => {}
+        }
+    }
+
+    fn apply_stats(&mut self, stats: Vec<RepoStats>) {
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let mut rows = Vec::with_capacity(stats.len());
+        for st in stats {
+            let (prev, trend) = if st.error.is_none() {
+                let _ = self.statsdb.record(&st.repo, &today, &st.snapshot);
+                (
+                    self.statsdb.previous(&st.repo, &today).ok().flatten(),
+                    self.statsdb.star_history(&st.repo, 60).unwrap_or_default(),
+                )
+            } else {
+                (None, Vec::new())
+            };
+            rows.push(StatsRow {
+                stats: st,
+                prev,
+                trend,
+            });
+        }
+        self.stats = rows;
+        self.stats_loaded = true;
+        self.loading = false;
+        self.last_refresh = Instant::now();
+
+        let n = self.stats.len();
+        if n == 0 {
+            self.selected = 0;
+        } else if self.selected >= n {
+            self.selected = n - 1;
+        }
+    }
+
+    /// Number of selectable rows in the active view.
+    fn active_len(&self) -> usize {
+        match self.view {
+            View::Ci => self.selectable().len(),
+            View::Stats => self.stats.len(),
+        }
     }
 
     fn apply(&mut self, results: Vec<RepoResult>) {
@@ -190,9 +298,8 @@ impl App {
     }
 
     /// Handle a keypress. Returns `false` to quit.
-    fn on_key(&mut self, key: KeyEvent, tx: &mpsc::Sender<Vec<RepoResult>>) -> bool {
+    fn on_key(&mut self, key: KeyEvent, tx: &mpsc::Sender<Msg>) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let rows = self.selectable();
 
         // A pending re-run confirmation swallows input until answered.
         if self.confirm.is_some() {
@@ -216,28 +323,41 @@ impl App {
             return true;
         }
 
+        let in_ci = self.view == View::Ci;
         match key.code {
             KeyCode::Char('q') => return false,
-            KeyCode::Esc => return false,
             KeyCode::Char('c') if ctrl => return false,
+            // Esc leaves the Stats view; from CI it quits.
+            KeyCode::Esc => {
+                if self.view == View::Stats {
+                    self.toggle_view(tx);
+                } else {
+                    return false;
+                }
+            }
+
+            KeyCode::Char('t') => self.toggle_view(tx),
+            KeyCode::Char('T') => {
+                crate::notify::test(self.sound);
+                self.status = Some("test notification sent".into());
+            }
 
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < rows.len() {
+                if self.selected + 1 < self.active_len() {
                     self.selected += 1;
                 }
             }
 
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 if !self.loading {
-                    self.trigger_refresh(tx);
+                    self.refresh_active(tx);
                 }
             }
-            KeyCode::Char('t') => {
-                crate::notify::test(self.sound);
-                self.status = Some("test notification sent".into());
-            }
-            KeyCode::Char('o') => {
+
+            // CI-only actions.
+            KeyCode::Char('o') if in_ci => {
+                let rows = self.selectable();
                 if let Some(s) = rows.get(self.selected) {
                     if let Some(sha) = &s.sha {
                         open_url(&ui::commit_url(&s.repo, sha));
@@ -248,7 +368,8 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('x') | KeyCode::Enter => {
+            KeyCode::Char('x') | KeyCode::Enter if in_ci => {
+                let rows = self.selectable();
                 if let Some(s) = rows.get(self.selected) {
                     self.confirm = Some(Confirm {
                         repo: s.repo.clone(),
@@ -290,29 +411,46 @@ impl App {
     fn draw(&self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
         let remaining =
             self.interval.as_secs() as i64 - self.last_refresh.elapsed().as_secs() as i64;
-        let n = self.selectable().len();
-        let selected = (n > 0).then(|| self.selected.min(n - 1));
-        let frame = Frame {
-            results: &self.results,
-            aggregate: self.aggregate,
-            branch: &self.branch,
-            now: Local::now(),
-            watch: Some(WatchInfo {
-                interval: self.interval.as_secs(),
-                remaining,
-            }),
-            spinner: self.spinner,
-            loading: self.loading,
-            hyperlinks: false,
-            selected,
-            prompt: self.prompt_line(),
+        let watch = WatchInfo {
+            interval: self.interval.as_secs(),
+            remaining,
         };
-        let lines = ui::build_lines(&frame);
+        let n = self.active_len();
+        let selected = (n > 0).then(|| self.selected.min(n - 1));
+
+        let lines = match self.view {
+            View::Ci => ui::build_lines(&Frame {
+                results: &self.results,
+                aggregate: self.aggregate,
+                branch: &self.branch,
+                now: Local::now(),
+                watch: Some(watch),
+                spinner: self.spinner,
+                loading: self.loading,
+                hyperlinks: false,
+                selected,
+                prompt: self.prompt_line(),
+            }),
+            View::Stats => ui::build_stats_lines(&StatsFrame {
+                rows: &self.stats,
+                now: Local::now(),
+                watch: Some(watch),
+                spinner: self.spinner,
+                loading: self.loading,
+                selected,
+            }),
+        };
         terminal.draw(|f| {
             f.render_widget(Paragraph::new(lines), f.area());
         })?;
         Ok(())
     }
+}
+
+/// Fetch stats for every repo concurrently.
+pub async fn fetch_stats_all(octo: &Octocrab, repos: &[String]) -> Vec<RepoStats> {
+    let futs = repos.iter().map(|r| crate::github::fetch_stats(octo, r));
+    futures::future::join_all(futs).await
 }
 
 /// Trigger a re-run of a workflow run via `gh api` (reuses gh's auth + scopes).

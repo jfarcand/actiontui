@@ -94,3 +94,31 @@ pub struct RepoResult {
     pub rows: Vec<WorkflowRow>,
     pub error: Option<String>,
 }
+
+/// A point-in-time snapshot of a repo's headline metrics.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Snapshot {
+    pub stars: i64,
+    pub forks: i64,
+    pub watchers: i64,
+    pub issues: i64,
+    pub prs: i64,
+}
+
+/// Freshly-fetched repo stats (canonical name + current snapshot).
+#[derive(Clone, Debug)]
+pub struct RepoStats {
+    pub repo: String,
+    pub snapshot: Snapshot,
+    pub error: Option<String>,
+}
+
+/// A stats table row: current stats, the prior snapshot (for deltas), and the
+/// recorded star history (for the chart).
+#[derive(Clone, Debug)]
+pub struct StatsRow {
+    pub stats: RepoStats,
+    pub prev: Option<Snapshot>,
+    /// (date, stars) in ascending date order.
+    pub trend: Vec<(String, i64)>,
+}

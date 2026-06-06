@@ -39,6 +39,10 @@ pub struct Cli {
     #[arg(long = "test-notify")]
     pub test_notify: bool,
 
+    /// Launch directly into the repo Stats view (implies watch).
+    #[arg(long = "stats")]
+    pub stats: bool,
+
     /// Additional repos as positional args (owner/repo).
     #[arg(value_name = "OWNER/REPO")]
     pub repos: Vec<String>,

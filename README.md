@@ -29,6 +29,7 @@ It's a Rust rewrite of a shell tool, built for a richer terminal experience: ani
 - **ETA** — for in-progress runs, estimated time remaining based on the most recent successful run's duration (`~3m 10s`), turning red with `+overrun` once it runs long.
 - **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, row selection, and a 6h auto-exit.
 - **Re-run from the TUI** — select a workflow with `↑`/`↓` and press `x` to re-run it (with a `y`/`n` confirm), via `gh api`. No browser round-trip.
+- **Stats view** (`t`) — per-repo Stars / Forks / Watchers / Issues / PRs with day-over-day deltas, plus a full-width unicode chart of the selected repo's star history. Snapshots are persisted to SQLite (`~/.config/actiontui/stats.db`) so the trend grows over time — far past GitHub's own 14-day traffic window. Launch straight into it with `--stats`.
 - **Aggregate view** — collapse every repo into one table grouped by repo.
 - **Notifications** — on a green→red or red→green transition, fires a macOS notification + distinct sound (`Basso` for failure, `Glass` for recovery); degrades to a terminal bell elsewhere. Test the channel any time with `--test-notify` or the `t` key.
 - **Efficient** — one page of runs per repo, with latest/recent/commit/ETA all derived client-side. Repos fetched concurrently.
@@ -56,6 +57,7 @@ actiontui -w 30                             # watch mode, 30s refresh
 actiontui -a -R r1 -R r2                    # aggregate into a single table
 actiontui --no-sound -w                     # visual notifications only
 actiontui --test-notify                     # fire a sample notification + sound, then exit
+actiontui --stats                           # launch into the repo Stats view
 ```
 
 ```sh
@@ -75,12 +77,13 @@ Repos are resolved in this order:
 
 | Key             | Action                                   |
 | --------------- | ---------------------------------------- |
+| `t`             | toggle the **Stats** view (CI ↔ stats)   |
 | `↑` / `↓` (`k`/`j`) | move the selection                   |
-| `x` / `Enter`   | re-run the selected workflow (`y`/`n` confirm) |
-| `o`             | open the selected row's commit in the browser |
-| `t`             | fire a test notification + sound         |
+| `x` / `Enter`   | re-run the selected workflow (`y`/`n` confirm) *(CI view)* |
+| `o`             | open the selected row's commit in the browser *(CI view)* |
+| `T`             | fire a test notification + sound         |
 | `r` / `R`       | refresh now                              |
-| `q` / `Esc` / `Ctrl-C` | quit                              |
+| `q` / `Ctrl-C`  | quit (`Esc` leaves the Stats view, else quits) |
 
 ## Configuration
 
@@ -103,6 +106,7 @@ exclude = ["Update #", "in /."]   # drops Dependabot version-update runs
 | `~/.config/actiontui/config.toml`     | defaults (repos, branch, aggregate, exclude…) |
 | `~/.config/actiontui/repos.conf`      | alternate repo list (one per line)            |
 | `~/.config/actiontui/state.json`      | last-known conclusions (transition detection) |
+| `~/.config/actiontui/stats.db`        | SQLite history of repo stats (for the chart)  |
 
 ## How it works
 

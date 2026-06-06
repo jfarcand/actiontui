@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 use serde::Deserialize;
 
-use crate::model::{Badge, Dot, RepoResult, WorkflowRow};
+use crate::model::{Badge, Dot, RepoResult, RepoStats, Snapshot, WorkflowRow};
 
 const RECENT_COUNT: usize = 6;
 const RUN_PAGE_SIZE: usize = 100;
@@ -166,6 +166,68 @@ async fn fetch_repo_inner(
 
     rows.sort_by_key(|r| r.workflow_name.to_lowercase());
     Ok(rows)
+}
+
+#[derive(Deserialize)]
+struct RepoInfo {
+    full_name: String,
+    #[serde(default)]
+    stargazers_count: i64,
+    #[serde(default)]
+    forks_count: i64,
+    #[serde(default)]
+    subscribers_count: i64,
+    #[serde(default)]
+    open_issues_count: i64,
+}
+
+#[derive(Deserialize)]
+struct PullStub {}
+
+/// Fetch a repo's headline stats (stars/forks/watchers/issues/PRs).
+///
+/// `open_issues_count` includes PRs, so we count open PRs separately and
+/// subtract to isolate true issues.
+pub async fn fetch_stats(octo: &Octocrab, repo: &str) -> RepoStats {
+    match fetch_stats_inner(octo, repo).await {
+        Ok((canonical, snapshot)) => RepoStats {
+            repo: canonical,
+            snapshot,
+            error: None,
+        },
+        Err(e) => RepoStats {
+            repo: repo.to_string(),
+            snapshot: Snapshot::default(),
+            error: Some(format!("{e:#}")),
+        },
+    }
+}
+
+async fn fetch_stats_inner(octo: &Octocrab, repo: &str) -> Result<(String, Snapshot)> {
+    let info: RepoInfo = octo
+        .get(&format!("/repos/{repo}"), None::<&()>)
+        .await
+        .with_context(|| format!("fetching repo {repo}"))?;
+
+    let prs = open_pr_count(octo, &info.full_name).await.unwrap_or(0);
+    let issues = (info.open_issues_count - prs).max(0);
+
+    let snapshot = Snapshot {
+        stars: info.stargazers_count,
+        forks: info.forks_count,
+        watchers: info.subscribers_count,
+        issues,
+        prs,
+    };
+    Ok((info.full_name, snapshot))
+}
+
+/// Open PR count via the pulls endpoint (caps at one page of 100 — plenty, and
+/// avoids the search API's permission/rate-limit pitfalls on private repos).
+async fn open_pr_count(octo: &Octocrab, repo: &str) -> Result<i64> {
+    let route = format!("/repos/{repo}/pulls?state=open&per_page=100");
+    let pulls: Vec<PullStub> = octo.get(&route, None::<&()>).await?;
+    Ok(pulls.len() as i64)
 }
 
 async fn active_workflow_ids(octo: &Octocrab, repo: &str) -> Result<HashSet<u64>> {

@@ -5,7 +5,7 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::{Badge, Dot, RepoResult, WorkflowRow};
+use crate::model::{Badge, Dot, RepoResult, StatsRow, WorkflowRow};
 
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -504,6 +504,293 @@ fn sgr_codes(style: &Style) -> String {
     codes.join(";")
 }
 
+// ── stats view ───────────────────────────────────────────────────
+const W_VAL: usize = 7;
+const W_DELTA: usize = 6;
+const CHART_W: usize = 60;
+const CHART_H: usize = 8;
+const BLOCKS: [char; 8] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
+
+/// Everything the stats renderer needs for one frame.
+pub struct StatsFrame<'a> {
+    pub rows: &'a [StatsRow],
+    pub now: DateTime<Local>,
+    pub watch: Option<WatchInfo>,
+    pub spinner: usize,
+    pub loading: bool,
+    pub selected: Option<usize>,
+}
+
+pub fn build_stats_lines(f: &StatsFrame) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(stats_header_line(f));
+    lines.push(Line::from(""));
+
+    if f.rows.is_empty() {
+        let msg = if f.loading {
+            "fetching stats…"
+        } else {
+            "no stats"
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(msg.to_string(), dim()),
+        ]));
+        return lines;
+    }
+
+    let repo_w = f
+        .rows
+        .iter()
+        .map(|r| short_name(&r.stats.repo).chars().count())
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 40);
+    let widths = stats_widths(repo_w);
+
+    lines.push(border(&widths, '┌', '┬', '┐'));
+    lines.push(stats_table_header(repo_w));
+    lines.push(border(&widths, '├', '┼', '┤'));
+    for (i, row) in f.rows.iter().enumerate() {
+        lines.push(stats_row(row, repo_w, f.selected == Some(i)));
+    }
+    lines.push(border(&widths, '└', '┴', '┘'));
+    lines.push(Line::from(""));
+
+    // Full-width stars chart for the selected repo.
+    if let Some(sel) = f.selected.and_then(|i| f.rows.get(i)) {
+        for l in star_chart(&sel.stats.repo, &sel.trend, sel.stats.snapshot.stars) {
+            lines.push(l);
+        }
+    }
+    lines
+}
+
+fn stats_header_line(f: &StatsFrame) -> Line<'static> {
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled("GitHub Stats", bold(Color::Cyan)),
+        Span::styled(format!("  {}", f.now.format("%Y-%m-%d %H:%M:%S")), dim()),
+    ];
+    if let Some(w) = &f.watch {
+        let spin = if f.loading {
+            format!(" {} refreshing", SPINNER[f.spinner % SPINNER.len()])
+        } else {
+            format!(" next in {}", fmt_duration(w.remaining.max(0)))
+        };
+        spans.push(Span::styled(
+            format!("  ⟳ every {}s ·{spin}", w.interval),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::styled(
+            "   ↑↓ select · t CI view · r refresh · q quit".to_string(),
+            dim(),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn stats_widths(repo_w: usize) -> Vec<usize> {
+    vec![
+        repo_w, W_VAL, W_DELTA, W_VAL, W_DELTA, W_VAL, W_DELTA, W_VAL, W_DELTA, W_VAL, W_DELTA,
+    ]
+}
+
+fn stats_table_header(repo_w: usize) -> Line<'static> {
+    let widths = stats_widths(repo_w);
+    let titles = [
+        "Repo", "Stars", "Δ", "Forks", "Δ", "Watch", "Δ", "Issues", "Δ", "PRs", "Δ",
+    ];
+    let cells: Vec<(Vec<Span>, usize)> = titles
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            // Right-align value headers, left-align repo + deltas.
+            let txt = if i > 0 && i % 2 == 1 {
+                format!("{t:>w$}", w = widths[i])
+            } else {
+                truncate(t, widths[i])
+            };
+            let len = txt.chars().count().min(widths[i]);
+            (vec![Span::styled(txt, bold(Color::White))], len)
+        })
+        .collect();
+    row_line(cells, &widths)
+}
+
+fn stats_row(row: &StatsRow, repo_w: usize, selected: bool) -> Line<'static> {
+    let widths = stats_widths(repo_w);
+    let name = short_name(&row.stats.repo);
+
+    if let Some(err) = &row.stats.error {
+        let mut cells = vec![text_cell_w(&name, repo_w, Style::default().fg(Color::Red))];
+        for _ in 0..10 {
+            cells.push(text_cell("--", dim()));
+        }
+        let _ = err;
+        let line = row_line(cells, &widths);
+        return if selected { highlight(line) } else { line };
+    }
+
+    let s = &row.stats.snapshot;
+    let p = row.prev;
+    let metrics: [(i64, Option<i64>); 5] = [
+        (s.stars, p.map(|p| p.stars)),
+        (s.forks, p.map(|p| p.forks)),
+        (s.watchers, p.map(|p| p.watchers)),
+        (s.issues, p.map(|p| p.issues)),
+        (s.prs, p.map(|p| p.prs)),
+    ];
+
+    let mut cells = vec![text_cell_w(
+        &name,
+        repo_w,
+        Style::default().fg(Color::White),
+    )];
+    for (cur, prev) in metrics {
+        cells.push(value_cell(cur));
+        cells.push(delta_cell(cur, prev));
+    }
+    let line = row_line(cells, &widths);
+    if selected { highlight(line) } else { line }
+}
+
+/// Right-justified numeric value cell.
+fn value_cell(v: i64) -> (Vec<Span<'static>>, usize) {
+    let t = format!("{v:>w$}", w = W_VAL);
+    let len = t.chars().count().min(W_VAL);
+    (
+        vec![Span::styled(t, Style::default().fg(Color::White))],
+        len,
+    )
+}
+
+/// Day-over-day delta cell: ▲ green up, ▼ red down, · dim flat, "new" if no prior.
+fn delta_cell(cur: i64, prev: Option<i64>) -> (Vec<Span<'static>>, usize) {
+    let (text, color) = match prev {
+        None => ("new".to_string(), Color::DarkGray),
+        Some(p) => {
+            let d = cur - p;
+            if d > 0 {
+                (format!("▲{d}"), Color::Green)
+            } else if d < 0 {
+                (format!("▼{}", -d), Color::Red)
+            } else {
+                ("·".to_string(), Color::DarkGray)
+            }
+        }
+    };
+    let t = truncate(&text, W_DELTA);
+    let len = t.chars().count();
+    (vec![Span::styled(t, Style::default().fg(color))], len)
+}
+
+/// A full-width block chart of a repo's star history.
+fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'static>> {
+    let short = short_name(repo);
+    if trend.len() < 2 {
+        return vec![Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{short} — stars: {current}"), bold(Color::Cyan)),
+            Span::styled(
+                "   (history builds daily — need ≥2 days for a chart)".to_string(),
+                dim(),
+            ),
+        ])];
+    }
+
+    let pts: Vec<(&str, i64)> = trend
+        .iter()
+        .rev()
+        .take(CHART_W)
+        .rev()
+        .map(|(d, v)| (d.as_str(), *v))
+        .collect();
+    let vals: Vec<i64> = pts.iter().map(|(_, v)| *v).collect();
+    let n = vals.len();
+    let minv = *vals.iter().min().unwrap();
+    let maxv = *vals.iter().max().unwrap();
+    let lw = digits(maxv).max(digits(minv));
+
+    let mut lines = vec![Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{short} — stars ({n}d)"), bold(Color::Cyan)),
+        Span::styled(format!("   {minv} → {maxv}"), dim()),
+    ])];
+
+    if maxv == minv {
+        // Flat series — a single level line.
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{maxv:>lw$} ┤"), dim()),
+            Span::styled("─".repeat(n), Style::default().fg(Color::Green)),
+        ]));
+    } else {
+        let levels = (CHART_H * 8) as f64;
+        let filled: Vec<i64> = vals
+            .iter()
+            .map(|&v| (((v - minv) as f64 / (maxv - minv) as f64) * levels).round() as i64)
+            .collect();
+        for r in 0..CHART_H {
+            let rfb = (CHART_H - 1 - r) as i64;
+            let ylab = if r == 0 {
+                format!("{maxv:>lw$}")
+            } else if r == CHART_H - 1 {
+                format!("{minv:>lw$}")
+            } else {
+                " ".repeat(lw)
+            };
+            let axis = if r == CHART_H - 1 { '┼' } else { '┤' };
+            let bar: String = filled
+                .iter()
+                .map(|&fl| {
+                    let e = fl - rfb * 8;
+                    if e >= 8 {
+                        '█'
+                    } else if e <= 0 {
+                        ' '
+                    } else {
+                        BLOCKS[e as usize]
+                    }
+                })
+                .collect();
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{ylab} {axis}"), dim()),
+                Span::styled(bar, Style::default().fg(Color::Green)),
+            ]));
+        }
+    }
+
+    // X axis + first/last date labels.
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{} └{}", " ".repeat(lw), "─".repeat(n)), dim()),
+    ]));
+    let first = pts.first().map(|(d, _)| short_date(d)).unwrap_or_default();
+    let last = pts.last().map(|(d, _)| short_date(d)).unwrap_or_default();
+    let gap = n.saturating_sub(first.len() + last.len()).max(1);
+    lines.push(Line::from(Span::styled(
+        format!("  {} {first}{}{last}", " ".repeat(lw), " ".repeat(gap)),
+        dim(),
+    )));
+    lines
+}
+
+fn short_name(repo: &str) -> String {
+    repo.rsplit('/').next().unwrap_or(repo).to_string()
+}
+
+fn short_date(d: &str) -> String {
+    // "YYYY-MM-DD" → "MM-DD"
+    d.get(5..).unwrap_or(d).to_string()
+}
+
+fn digits(n: i64) -> usize {
+    n.abs().to_string().len() + usize::from(n < 0)
+}
+
 fn sanitize(s: &str) -> String {
     s.replace(['—', '–'], "-")
 }
@@ -519,5 +806,88 @@ fn truncate(s: &str, w: usize) -> String {
         let mut t: String = s.chars().take(w - 1).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{RepoStats, Snapshot, StatsRow};
+
+    #[test]
+    fn stats_view_renders_delta_and_chart() {
+        let row = StatsRow {
+            stats: RepoStats {
+                repo: "owner/repo".to_string(),
+                snapshot: Snapshot {
+                    stars: 20,
+                    forks: 2,
+                    watchers: 3,
+                    issues: 1,
+                    prs: 0,
+                },
+                error: None,
+            },
+            prev: Some(Snapshot {
+                stars: 17,
+                forks: 2,
+                watchers: 3,
+                issues: 1,
+                prs: 0,
+            }),
+            trend: vec![
+                ("2026-06-01".to_string(), 10),
+                ("2026-06-02".to_string(), 14),
+                ("2026-06-03".to_string(), 20),
+            ],
+        };
+        let f = StatsFrame {
+            rows: std::slice::from_ref(&row),
+            now: Local::now(),
+            watch: None,
+            spinner: 0,
+            loading: false,
+            selected: Some(0),
+        };
+        let txt = lines_to_ansi(&build_stats_lines(&f));
+
+        assert!(txt.contains("repo"), "short repo name in table");
+        assert!(txt.contains("stars"), "chart title present");
+        assert!(txt.contains("▲3"), "stars delta 20-17 = +3");
+        let has_bar = "▁▂▃▄▅▆▇█".chars().any(|c| txt.contains(c));
+        assert!(has_bar, "chart should render at least one block bar");
+    }
+
+    #[test]
+    fn chart_needs_two_points() {
+        let row = StatsRow {
+            stats: RepoStats {
+                repo: "owner/repo".to_string(),
+                snapshot: Snapshot {
+                    stars: 5,
+                    forks: 0,
+                    watchers: 0,
+                    issues: 0,
+                    prs: 0,
+                },
+                error: None,
+            },
+            prev: None,
+            trend: vec![("2026-06-03".to_string(), 5)],
+        };
+        let f = StatsFrame {
+            rows: std::slice::from_ref(&row),
+            now: Local::now(),
+            watch: None,
+            spinner: 0,
+            loading: false,
+            selected: Some(0),
+        };
+        let txt = lines_to_ansi(&build_stats_lines(&f));
+        assert!(
+            txt.contains("history builds daily"),
+            "single point → note, not chart"
+        );
+        assert!(txt.contains("new"), "no prior snapshot → 'new' delta");
     }
 }
