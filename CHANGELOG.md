@@ -2,7 +2,10 @@
 
 ## [0.1.1] — 2026-06-06
 
-
+Maintenance release — no user-facing behavior change. Dual-licensed
+MIT OR Apache-2.0; adopted a strict clippy lint policy and a structured error
+type (replacing `anyhow`); pinned the Rust toolchain (1.94.0) for reproducible
+CI; added git hooks and contributor standards (`CLAUDE.md`).
 
 ## [0.1.0] — 2026-06-05
 
