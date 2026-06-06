@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] — 2026-06-06
+
+- chore: relicense under Apache-2.0 only (drop MIT)
+- ci: decouple crates.io publish from binary builds so a flaky runner can't block it
+
+
 ## [0.1.1] — 2026-06-06
 
 Maintenance release — no user-facing behavior change. Dual-licensed

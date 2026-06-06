@@ -1,6 +1,6 @@
 [package]
 name = "actiontui"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A Ratatui terminal dashboard for watching GitHub Actions workflow runs"
 license = "Apache-2.0"
