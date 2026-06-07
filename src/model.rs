@@ -125,3 +125,20 @@ pub struct StatsRow {
     /// (date, stars) in ascending date order.
     pub trend: Vec<(String, i64)>,
 }
+
+/// One GitHub API rate-limit bucket (core, search, graphql, …).
+#[derive(Clone, Debug)]
+pub struct RateBucket {
+    pub name: String,
+    pub limit: i64,
+    pub used: i64,
+    pub remaining: i64,
+    pub reset: DateTime<Utc>,
+}
+
+/// A rate-limit table row: the bucket plus its used-delta since the last refresh.
+#[derive(Clone, Debug)]
+pub struct RateRow {
+    pub bucket: RateBucket,
+    pub delta_used: Option<i64>,
+}

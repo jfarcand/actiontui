@@ -2,6 +2,7 @@
 //! Watch-mode TUI: a live, alt-screen dashboard with background refresh,
 //! spinner animation, keyboard control, and a hard auto-exit ceiling.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,22 +16,35 @@ use ratatui::widgets::Paragraph;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
-use crate::model::{RepoResult, RepoStats, StatsRow};
+use crate::model::{RateBucket, RateRow, RepoResult, RepoStats, StatsRow};
 use crate::state::State;
 use crate::statsdb::StatsDb;
-use crate::ui::{self, Frame, StatsFrame, WatchInfo};
+use crate::ui::{self, Frame, RateFrame, StatsFrame, WatchInfo};
 
 /// Which view is on screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Ci,
     Stats,
+    Rate,
 }
 
 /// A background-fetch result delivered over the channel.
 enum Msg {
     Ci(Vec<RepoResult>),
     Stats(Vec<RepoStats>),
+    Rate(Vec<RateBucket>),
+}
+
+/// API quota below which the rate view fires a one-shot alert.
+const RATE_ALERT_THRESHOLD: i64 = 1000;
+
+/// Which view the TUI opens in.
+#[derive(Clone, Copy)]
+pub enum StartView {
+    Ci,
+    Stats,
+    Rate,
 }
 
 /// A selectable row, flattened across repos in render order.
@@ -68,12 +82,17 @@ pub struct App {
     started: Instant,
     state: State,
 
-    /// Active view (CI workflows or repo stats).
+    /// Active view (CI workflows, repo stats, or API rate limits).
     view: View,
     /// Stats rows + persistence (lazily loaded the first time Stats is shown).
     stats: Vec<StatsRow>,
     stats_loaded: bool,
     statsdb: StatsDb,
+    /// Rate-limit rows + per-bucket used baseline for deltas.
+    rate: Vec<RateRow>,
+    rate_loaded: bool,
+    rate_prev_used: HashMap<String, i64>,
+    rate_alert_fired: bool,
 
     /// Index into the active view's rows.
     selected: usize,
@@ -95,7 +114,7 @@ impl App {
         interval_secs: u64,
         state: State,
         statsdb: StatsDb,
-        start_stats: bool,
+        start_view: StartView,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -112,10 +131,18 @@ impl App {
             last_refresh: now,
             started: now,
             state,
-            view: if start_stats { View::Stats } else { View::Ci },
+            view: match start_view {
+                StartView::Ci => View::Ci,
+                StartView::Stats => View::Stats,
+                StartView::Rate => View::Rate,
+            },
             stats: Vec::new(),
             stats_loaded: false,
             statsdb,
+            rate: Vec::new(),
+            rate_loaded: false,
+            rate_prev_used: HashMap::new(),
+            rate_alert_fired: false,
             selected: 0,
             confirm: None,
             status: None,
@@ -165,6 +192,7 @@ impl App {
                     match msg {
                         Msg::Ci(results) => self.apply(results),
                         Msg::Stats(stats) => self.apply_stats(stats),
+                        Msg::Rate(buckets) => self.apply_rate(buckets),
                     }
                 }
             }
@@ -178,6 +206,7 @@ impl App {
         match self.view {
             View::Ci => self.trigger_refresh(tx),
             View::Stats => self.trigger_stats(tx),
+            View::Rate => self.trigger_rate(tx),
         }
     }
 
@@ -207,11 +236,25 @@ impl App {
         });
     }
 
-    /// Switch between the CI and Stats views, loading data on first entry.
-    fn toggle_view(&mut self, tx: &mpsc::Sender<Msg>) {
-        self.view = match self.view {
-            View::Ci => View::Stats,
-            View::Stats => View::Ci,
+    /// Spawn a background rate-limit fetch.
+    fn trigger_rate(&mut self, tx: &mpsc::Sender<Msg>) {
+        self.loading = true;
+        let octo = Arc::clone(&self.octo);
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let _ = match crate::github::fetch_rate(&octo).await {
+                Ok(buckets) => tx.send(Msg::Rate(buckets)).await,
+                Err(_) => tx.send(Msg::Rate(Vec::new())).await,
+            };
+        });
+    }
+
+    /// Go to `target`, or back to CI if already there. Loads data on first entry.
+    fn switch_view(&mut self, target: View, tx: &mpsc::Sender<Msg>) {
+        self.view = if self.view == target {
+            View::Ci
+        } else {
+            target
         };
         self.confirm = None;
         self.selected = 0;
@@ -219,10 +262,49 @@ impl App {
             return;
         }
         match self.view {
-            View::Stats if !self.stats_loaded => self.trigger_stats(tx),
             View::Ci if self.results.is_empty() => self.trigger_refresh(tx),
+            View::Stats if !self.stats_loaded => self.trigger_stats(tx),
+            View::Rate if !self.rate_loaded => self.trigger_rate(tx),
             _ => {}
         }
+    }
+
+    fn apply_rate(&mut self, buckets: Vec<RateBucket>) {
+        let rows: Vec<RateRow> = buckets
+            .into_iter()
+            .map(|b| {
+                let delta = self
+                    .rate_prev_used
+                    .insert(b.name.clone(), b.used)
+                    .map(|prev| b.used - prev);
+                RateRow {
+                    bucket: b,
+                    delta_used: delta,
+                }
+            })
+            .collect();
+
+        // One-shot alert when the core bucket dips below the threshold.
+        if let Some(core) = rows.iter().find(|r| r.bucket.name == "core") {
+            if core.bucket.remaining < RATE_ALERT_THRESHOLD {
+                if !self.rate_alert_fired {
+                    crate::notify::rate_alert(
+                        "core",
+                        core.bucket.remaining,
+                        core.bucket.limit,
+                        self.sound,
+                    );
+                    self.rate_alert_fired = true;
+                }
+            } else {
+                self.rate_alert_fired = false;
+            }
+        }
+
+        self.rate = rows;
+        self.rate_loaded = true;
+        self.loading = false;
+        self.last_refresh = Instant::now();
     }
 
     fn apply_stats(&mut self, stats: Vec<RepoStats>) {
@@ -262,6 +344,7 @@ impl App {
         match self.view {
             View::Ci => self.selectable().len(),
             View::Stats => self.stats.len(),
+            View::Rate => 0, // rate rows aren't selectable
         }
     }
 
@@ -323,16 +406,16 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return false,
             KeyCode::Char('c') if ctrl => return false,
-            // Esc leaves the Stats view; from CI it quits.
+            // Esc leaves an overlay view back to CI; from CI it quits.
             KeyCode::Esc => {
-                if self.view == View::Stats {
-                    self.toggle_view(tx);
-                } else {
+                if self.view == View::Ci {
                     return false;
                 }
+                self.switch_view(View::Ci, tx);
             }
 
-            KeyCode::Char('t') => self.toggle_view(tx),
+            KeyCode::Char('t') => self.switch_view(View::Stats, tx),
+            KeyCode::Char('g') => self.switch_view(View::Rate, tx),
             KeyCode::Char('T') => {
                 crate::notify::test(self.sound);
                 self.status = Some("test notification sent".into());
@@ -434,6 +517,13 @@ impl App {
                 spinner: self.spinner,
                 loading: self.loading,
                 selected,
+            }),
+            View::Rate => ui::build_rate_lines(&RateFrame {
+                rows: &self.rate,
+                now: Local::now(),
+                watch: Some(watch),
+                spinner: self.spinner,
+                loading: self.loading,
             }),
         };
         terminal.draw(|f| {

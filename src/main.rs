@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 use chrono::Local;
 use clap::Parser;
 
-use crate::app::App;
+use crate::app::{App, StartView};
 use crate::cli::Cli;
 use crate::config::{FileConfig, Paths, Settings};
 use crate::error::{Error, Result};
@@ -52,6 +52,13 @@ async fn main() -> Result<()> {
             }
             let state = State::load(&paths.state_file);
             let statsdb = statsdb::StatsDb::open(&paths.stats_db)?;
+            let start_view = if settings.start_rate {
+                StartView::Rate
+            } else if settings.start_stats {
+                StartView::Stats
+            } else {
+                StartView::Ci
+            };
             let app = App::new(
                 octo,
                 settings.repos,
@@ -62,7 +69,7 @@ async fn main() -> Result<()> {
                 interval,
                 state,
                 statsdb,
-                settings.start_stats,
+                start_view,
             );
             app.run().await
         }

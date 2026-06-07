@@ -6,7 +6,7 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::{Badge, Dot, RepoResult, StatsRow, WorkflowRow};
+use crate::model::{Badge, Dot, RateRow, RepoResult, StatsRow, WorkflowRow};
 
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -99,7 +99,8 @@ fn header_line(f: &Frame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   ↑↓ select · x rerun · o open · t test · r refresh · q quit".to_string(),
+            "   ↑↓ select · x rerun · o open · t stats · g rate · T test · r refresh · q quit"
+                .to_string(),
             dim(),
         ));
     }
@@ -585,7 +586,7 @@ fn stats_header_line(f: &StatsFrame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   ↑↓ select · t CI view · r refresh · q quit".to_string(),
+            "   ↑↓ select · t CI view · g rate · r refresh · q quit".to_string(),
             dim(),
         ));
     }
@@ -787,6 +788,166 @@ fn digits(n: i64) -> usize {
     n.abs().to_string().len() + usize::from(n < 0)
 }
 
+// ── rate-limit view ──────────────────────────────────────────────
+const W_RATE_RESET: usize = 22;
+
+/// Everything the rate-limit renderer needs for one frame.
+pub struct RateFrame<'a> {
+    pub rows: &'a [RateRow],
+    pub now: DateTime<Local>,
+    pub watch: Option<WatchInfo>,
+    pub spinner: usize,
+    pub loading: bool,
+}
+
+pub fn build_rate_lines(f: &RateFrame) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(rate_header_line(f));
+    lines.push(Line::from(""));
+
+    if f.rows.is_empty() {
+        let msg = if f.loading {
+            "fetching rate limits…"
+        } else {
+            "no rate-limit data"
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(msg.to_string(), dim()),
+        ]));
+        return lines;
+    }
+
+    let name_w = f
+        .rows
+        .iter()
+        .map(|r| r.bucket.name.chars().count())
+        .max()
+        .unwrap_or(10)
+        .clamp(10, 24);
+    let widths = rate_widths(name_w);
+
+    lines.push(border(&widths, '┌', '┬', '┐'));
+    lines.push(rate_header_row(name_w));
+    lines.push(border(&widths, '├', '┼', '┤'));
+    for row in f.rows {
+        lines.push(rate_row(row, name_w, f.now));
+    }
+    lines.push(border(&widths, '└', '┴', '┘'));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "the rate_limit endpoint is free — polling it costs no quota".to_string(),
+            dim(),
+        ),
+    ]));
+    lines
+}
+
+fn rate_header_line(f: &RateFrame) -> Line<'static> {
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled("GitHub API Rate Limits", bold(Color::Cyan)),
+        Span::styled(format!("  {}", f.now.format("%Y-%m-%d %H:%M:%S")), dim()),
+    ];
+    if let Some(w) = &f.watch {
+        let spin = if f.loading {
+            format!(" {} refreshing", SPINNER[f.spinner % SPINNER.len()])
+        } else {
+            format!(" next in {}", fmt_duration(w.remaining.max(0)))
+        };
+        spans.push(Span::styled(
+            format!("  ⟳ every {}s ·{spin}", w.interval),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::styled(
+            "   g CI view · r refresh · q quit".to_string(),
+            dim(),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn rate_widths(name_w: usize) -> Vec<usize> {
+    vec![name_w, W_VAL, W_VAL, W_VAL, W_DELTA, W_RATE_RESET]
+}
+
+fn rate_header_row(name_w: usize) -> Line<'static> {
+    let widths = rate_widths(name_w);
+    let titles = ["Bucket", "Remaining", "Limit", "Used", "Δ", "Resets"];
+    let cells: Vec<(Vec<Span>, usize)> = titles
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let txt = if (1..=3).contains(&i) {
+                format!("{t:>w$}", w = widths[i])
+            } else {
+                truncate(t, widths[i])
+            };
+            let len = txt.chars().count().min(widths[i]);
+            (vec![Span::styled(txt, bold(Color::White))], len)
+        })
+        .collect();
+    row_line(cells, &widths)
+}
+
+fn rate_row(row: &RateRow, name_w: usize, now: DateTime<Local>) -> Line<'static> {
+    let widths = rate_widths(name_w);
+    let b = &row.bucket;
+    let cells = vec![
+        text_cell_w(&b.name, name_w, Style::default().fg(Color::White)),
+        rate_value(b.remaining, rate_color(b.remaining, b.limit)),
+        rate_value(b.limit, dim()),
+        rate_value(b.used, dim()),
+        rate_delta(row.delta_used),
+        rate_reset_cell(b.reset, now),
+    ];
+    row_line(cells, &widths)
+}
+
+fn rate_color(remaining: i64, limit: i64) -> Style {
+    let c = if remaining == 0 {
+        Color::Red
+    } else if limit > 0 && remaining < limit / 10 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    Style::default().fg(c)
+}
+
+/// Right-justified value cell with an explicit style.
+fn rate_value(v: i64, style: Style) -> (Vec<Span<'static>>, usize) {
+    let t = format!("{v:>W_VAL$}");
+    let len = t.chars().count().min(W_VAL);
+    (vec![Span::styled(t, style)], len)
+}
+
+fn rate_delta(delta: Option<i64>) -> (Vec<Span<'static>>, usize) {
+    let (text, color) = match delta {
+        None => ("—".to_string(), Color::DarkGray),
+        Some(d) if d > 0 => (format!("+{d}"), Color::Red),
+        Some(d) if d < 0 => (format!("{d}"), Color::DarkGray),
+        Some(_) => ("0".to_string(), Color::DarkGray),
+    };
+    let t = truncate(&text, W_DELTA);
+    let len = t.chars().count();
+    (vec![Span::styled(t, Style::default().fg(color))], len)
+}
+
+fn rate_reset_cell(reset: DateTime<Utc>, now: DateTime<Local>) -> (Vec<Span<'static>>, usize) {
+    let secs = (reset - now.with_timezone(&Utc)).num_seconds();
+    let when = reset.with_timezone(&Local).format("%H:%M:%S");
+    let text = if secs > 0 {
+        format!("{when} (in {})", fmt_duration(secs))
+    } else {
+        format!("{when} (now)")
+    };
+    text_cell_w(&text, W_RATE_RESET, dim())
+}
+
 fn sanitize(s: &str) -> String {
     s.replace(['—', '–'], "-")
 }
@@ -852,6 +1013,33 @@ mod tests {
         assert!(txt.contains("▲3"), "stars delta 20-17 = +3");
         let has_bar = "▁▂▃▄▅▆▇█".chars().any(|c| txt.contains(c));
         assert!(has_bar, "chart should render at least one block bar");
+    }
+
+    #[test]
+    fn rate_view_renders() {
+        use crate::model::{RateBucket, RateRow};
+        let row = RateRow {
+            bucket: RateBucket {
+                name: "core".to_string(),
+                limit: 5000,
+                used: 1601,
+                remaining: 3399,
+                reset: Utc::now() + chrono::Duration::minutes(12),
+            },
+            delta_used: Some(7),
+        };
+        let f = RateFrame {
+            rows: std::slice::from_ref(&row),
+            now: Local::now(),
+            watch: None,
+            spinner: 0,
+            loading: false,
+        };
+        let txt = lines_to_ansi(&build_rate_lines(&f));
+        assert!(txt.contains("core"), "bucket name shown");
+        assert!(txt.contains("3399"), "remaining shown");
+        assert!(txt.contains("+7"), "used delta shown");
+        assert!(txt.contains("costs no quota"), "free-endpoint footer shown");
     }
 
     #[test]

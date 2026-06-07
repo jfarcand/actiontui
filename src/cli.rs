@@ -44,6 +44,10 @@ pub struct Cli {
     #[arg(long = "stats")]
     pub stats: bool,
 
+    /// Launch directly into the API rate-limit view (implies watch).
+    #[arg(long = "rate")]
+    pub rate: bool,
+
     /// Additional repos as positional args (owner/repo).
     #[arg(value_name = "OWNER/REPO")]
     pub repos: Vec<String>,

@@ -32,6 +32,7 @@ Why it exists: checking a dozen repos' Actions tabs by hand is tedious, GitHub's
 - **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, row selection, and a 6h auto-exit.
 - **Re-run from the TUI** — select a workflow with `↑`/`↓` and press `x` to re-run it (with a `y`/`n` confirm), via `gh api`. No browser round-trip.
 - **Stats view** (`t`) — per-repo Stars / Forks / Watchers / Issues / PRs with day-over-day deltas, plus a full-width unicode chart of the selected repo's star history. Snapshots are persisted to SQLite (`~/.config/actiontui/stats.db`) so the trend grows over time — far past GitHub's own 14-day traffic window. Launch straight into it with `--stats`.
+- **Rate-limit view** (`g`) — every GitHub API quota bucket (core, search, graphql, …) with used/remaining/limit, a per-refresh Δ, and when each resets. Fires a sound alert when the `core` bucket dips below 1000. The `rate_limit` endpoint is free, so polling it costs no quota. Launch straight into it with `--rate`.
 - **Aggregate view** — collapse every repo into one table grouped by repo.
 - **Notifications** — on a green→red or red→green transition, fires a macOS notification + distinct sound (`Basso` for failure, `Glass` for recovery); degrades to a terminal bell elsewhere. Test the channel any time with `--test-notify` or the `t` key.
 - **Efficient** — one page of runs per repo, with latest/recent/commit/ETA all derived client-side. Repos fetched concurrently.
@@ -60,6 +61,7 @@ actiontui -a -R r1 -R r2                    # aggregate into a single table
 actiontui --no-sound -w                     # visual notifications only
 actiontui --test-notify                     # fire a sample notification + sound, then exit
 actiontui --stats                           # launch into the repo Stats view
+actiontui --rate                            # launch into the API rate-limit view
 ```
 
 ```sh
@@ -80,6 +82,7 @@ Repos are resolved in this order:
 | Key             | Action                                   |
 | --------------- | ---------------------------------------- |
 | `t`             | toggle the **Stats** view (CI ↔ stats)   |
+| `g`             | toggle the **Rate-limit** view (CI ↔ rate) |
 | `↑` / `↓` (`k`/`j`) | move the selection                   |
 | `x` / `Enter`   | re-run the selected workflow (`y`/`n` confirm) *(CI view)* |
 | `o`             | open the selected row's commit in the browser *(CI view)* |

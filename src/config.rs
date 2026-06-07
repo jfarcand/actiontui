@@ -87,6 +87,8 @@ pub struct Settings {
     pub exclude: Vec<String>,
     /// Start the TUI in the Stats view.
     pub start_stats: bool,
+    /// Start the TUI in the rate-limit view.
+    pub start_rate: bool,
 }
 
 impl Settings {
@@ -110,7 +112,7 @@ impl Settings {
                     .unwrap_or(false)
                     .then(|| file.interval.unwrap_or(60))
             })
-            .or_else(|| cli.stats.then(|| file.interval.unwrap_or(60)));
+            .or_else(|| (cli.stats || cli.rate).then(|| file.interval.unwrap_or(60)));
 
         // --no-sound forces off; otherwise config, defaulting to on.
         let sound = !cli.no_sound && file.sound.unwrap_or(true);
@@ -130,6 +132,7 @@ impl Settings {
             sound,
             exclude,
             start_stats: cli.stats,
+            start_rate: cli.rate,
         })
     }
 }

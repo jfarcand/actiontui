@@ -8,6 +8,16 @@ use crate::state::Transition;
 const SOUND_FAILURE: &str = "Basso";
 const SOUND_RECOVERY: &str = "Glass";
 
+/// Alert when an API rate-limit bucket drops below the threshold.
+pub fn rate_alert(bucket: &str, remaining: i64, limit: i64, sound: bool) {
+    fire(
+        "actiontui: low rate limit",
+        &format!("{bucket}: {remaining}/{limit} remaining"),
+        "Sosumi",
+        sound,
+    );
+}
+
 /// Fire a sample failure + recovery notification so the channel can be tested
 /// on demand (the `t` key in watch mode, or `--test-notify`).
 pub fn test(sound: bool) {

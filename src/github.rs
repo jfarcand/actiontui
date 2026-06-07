@@ -10,7 +10,7 @@ use octocrab::Octocrab;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
-use crate::model::{Badge, Dot, RepoResult, RepoStats, Snapshot, WorkflowRow};
+use crate::model::{Badge, Dot, RateBucket, RepoResult, RepoStats, Snapshot, WorkflowRow};
 
 const RECENT_COUNT: usize = 6;
 const RUN_PAGE_SIZE: usize = 100;
@@ -232,6 +232,41 @@ async fn open_pr_count(octo: &Octocrab, repo: &str) -> Result<i64> {
     let route = format!("/repos/{repo}/pulls?state=open&per_page=100");
     let pulls: Vec<PullStub> = octo.get(&route, None::<&()>).await?;
     Ok(pulls.len() as i64)
+}
+
+#[derive(Deserialize)]
+struct RateLimitResponse {
+    resources: HashMap<String, ApiRate>,
+}
+
+#[derive(Deserialize)]
+struct ApiRate {
+    limit: i64,
+    used: i64,
+    remaining: i64,
+    reset: i64,
+}
+
+/// Fetch all GitHub API rate-limit buckets. The `rate_limit` endpoint is free —
+/// it does not count against any bucket — so it's safe to poll.
+pub async fn fetch_rate(octo: &Octocrab) -> Result<Vec<RateBucket>> {
+    let resp: RateLimitResponse = octo
+        .get("/rate_limit", None::<&()>)
+        .await
+        .map_err(|e| Error::GitHub(format!("fetching rate limit: {e}")))?;
+    let mut buckets: Vec<RateBucket> = resp
+        .resources
+        .into_iter()
+        .map(|(name, r)| RateBucket {
+            name,
+            limit: r.limit,
+            used: r.used,
+            remaining: r.remaining,
+            reset: DateTime::from_timestamp(r.reset, 0).unwrap_or_else(Utc::now),
+        })
+        .collect();
+    buckets.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(buckets)
 }
 
 async fn active_workflow_ids(octo: &Octocrab, repo: &str) -> Result<HashSet<u64>> {
