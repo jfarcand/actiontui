@@ -44,6 +44,9 @@ const RATE_ALERT_THRESHOLD: i64 = 1000;
 /// Time window for the workflow detail chart.
 const DETAIL_DAYS: u32 = 7;
 
+/// Seconds added/removed per `+`/`-` keypress (clamped to 5s..1h).
+const INTERVAL_STEP: i64 = 15;
+
 /// Which view the TUI opens in.
 #[derive(Clone, Copy)]
 pub enum StartView {
@@ -64,6 +67,14 @@ struct Sel {
 /// A pending re-run awaiting y/n confirmation.
 struct Confirm {
     repo: String,
+    run_id: u64,
+    workflow: String,
+}
+
+/// The workflow drilled into for the detail view.
+struct DetailTarget {
+    repo: String,
+    workflow_id: u64,
     run_id: u64,
     workflow: String,
 }
@@ -99,8 +110,8 @@ pub struct App {
     rate_loaded: bool,
     rate_prev_used: HashMap<String, i64>,
     rate_alert_fired: bool,
-    /// Drilled-in workflow detail target: (repo, workflow id, name) + data.
-    detail_target: Option<(String, u64, String)>,
+    /// The drilled-in workflow + its fetched detail.
+    detail_target: Option<DetailTarget>,
     detail: Option<WorkflowDetail>,
 
     /// Index into the active view's rows.
@@ -268,7 +279,12 @@ impl App {
         let Some(s) = rows.get(self.selected) else {
             return;
         };
-        self.detail_target = Some((s.repo.clone(), s.workflow_id, s.workflow.clone()));
+        self.detail_target = Some(DetailTarget {
+            repo: s.repo.clone(),
+            workflow_id: s.workflow_id,
+            run_id: s.run_id,
+            workflow: s.workflow.clone(),
+        });
         self.detail = None;
         self.view = View::Detail;
         if !self.loading {
@@ -278,9 +294,10 @@ impl App {
 
     /// Spawn a background fetch of the drilled-in workflow's run history.
     fn trigger_detail(&mut self, tx: &mpsc::Sender<Msg>) {
-        let Some((repo, workflow_id, workflow)) = self.detail_target.clone() else {
+        let Some(t) = &self.detail_target else {
             return;
         };
+        let (repo, workflow_id, workflow) = (t.repo.clone(), t.workflow_id, t.workflow.clone());
         self.loading = true;
         let octo = Arc::clone(&self.octo);
         let branch = self.branch.clone();
@@ -399,6 +416,13 @@ impl App {
         }
     }
 
+    /// Adjust the live refresh interval (clamped 5s..1h).
+    fn adjust_interval(&mut self, delta: i64) {
+        let secs = (self.interval.as_secs() as i64 + delta).clamp(5, 3600) as u64;
+        self.interval = Duration::from_secs(secs);
+        self.status = Some(format!("refresh every {secs}s"));
+    }
+
     /// Number of selectable rows in the active view.
     fn active_len(&self) -> usize {
         match self.view {
@@ -453,7 +477,7 @@ impl App {
                     Ok(()) => {
                         self.status =
                             Some(format!("⟳ re-run triggered — {} ({})", c.workflow, c.repo));
-                        self.trigger_refresh(tx);
+                        self.refresh_active(tx);
                     }
                     Err(e) => self.status = Some(format!("✗ re-run failed: {e}")),
                 }
@@ -489,9 +513,34 @@ impl App {
                 }
             }
 
-            KeyCode::Char('r' | 'R') => {
+            KeyCode::Char('R') => {
                 if !self.loading {
                     self.refresh_active(tx);
+                }
+            }
+            // Change the refresh interval on the fly.
+            KeyCode::Char('+' | '=') => self.adjust_interval(INTERVAL_STEP),
+            KeyCode::Char('-' | '_') => self.adjust_interval(-INTERVAL_STEP),
+
+            // Re-run: the selected CI row, or the workflow being viewed in detail.
+            KeyCode::Char('r') => {
+                let target = match self.view {
+                    View::Ci => self
+                        .selectable()
+                        .get(self.selected)
+                        .map(|s| (s.repo.clone(), s.run_id, s.workflow.clone())),
+                    View::Detail => self
+                        .detail_target
+                        .as_ref()
+                        .map(|t| (t.repo.clone(), t.run_id, t.workflow.clone())),
+                    _ => None,
+                };
+                if let Some((repo, run_id, workflow)) = target {
+                    self.confirm = Some(Confirm {
+                        repo,
+                        run_id,
+                        workflow,
+                    });
                 }
             }
 
@@ -506,16 +555,6 @@ impl App {
                     } else {
                         self.status = Some("no commit for that row".into());
                     }
-                }
-            }
-            KeyCode::Char('x') if in_ci => {
-                let rows = self.selectable();
-                if let Some(s) = rows.get(self.selected) {
-                    self.confirm = Some(Confirm {
-                        repo: s.repo.clone(),
-                        run_id: s.run_id,
-                        workflow: s.workflow.clone(),
-                    });
                 }
             }
             KeyCode::Enter if in_ci => self.open_detail(tx),
@@ -558,6 +597,7 @@ impl App {
         };
         let n = self.active_len();
         let selected = (n > 0).then(|| self.selected.min(n - 1));
+        let width = terminal.size().map_or(80, |s| s.width);
 
         let lines = match self.view {
             View::Ci => ui::build_lines(&Frame {
@@ -579,6 +619,7 @@ impl App {
                 spinner: self.spinner,
                 loading: self.loading,
                 selected,
+                width,
             }),
             View::Rate => ui::build_rate_lines(&RateFrame {
                 rows: &self.rate,
@@ -591,7 +632,7 @@ impl App {
                 let (repo, workflow) = self
                     .detail_target
                     .as_ref()
-                    .map_or(("", ""), |(r, _, w)| (r.as_str(), w.as_str()));
+                    .map_or(("", ""), |t| (t.repo.as_str(), t.workflow.as_str()));
                 ui::build_detail_lines(&DetailFrame {
                     repo,
                     workflow,
@@ -600,6 +641,7 @@ impl App {
                     watch: Some(watch),
                     spinner: self.spinner,
                     loading: self.loading,
+                    width,
                 })
             }
         };

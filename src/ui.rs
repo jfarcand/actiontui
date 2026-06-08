@@ -101,7 +101,7 @@ fn header_line(f: &Frame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   ↑↓ select · ⏎ detail · x rerun · o open · t stats · g rate · r refresh · q quit"
+            "   ↑↓ · ⏎ detail · r rerun · o open · t stats · g rate · +/− speed · q quit"
                 .to_string(),
             dim(),
         ));
@@ -511,9 +511,71 @@ fn sgr_codes(style: &Style) -> String {
 // ── stats view ───────────────────────────────────────────────────
 const W_VAL: usize = 7;
 const W_DELTA: usize = 6;
-const CHART_W: usize = 60;
-const CHART_H: usize = 8;
+const CHART_H: usize = 12;
 const BLOCKS: [char; 8] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
+
+/// Max bars that fit at one column each, given the terminal `width`.
+fn chart_capacity(width: usize, label_w: usize) -> usize {
+    width.saturating_sub(label_w + 5).clamp(8, 600)
+}
+
+/// Lay out `n` bars across the available width: (bar width, gap, total columns).
+fn bar_layout(n: usize, width: usize, label_w: usize) -> (usize, usize, usize) {
+    let n = n.max(1);
+    let avail = chart_capacity(width, label_w);
+    let unit = (avail / n).max(1);
+    let gap = usize::from(unit >= 3);
+    let bar_w = (unit - gap).clamp(1, 12);
+    (bar_w, gap, n * (bar_w + gap))
+}
+
+/// Render block bars — each column is `(fill_in_eighths, color)` — widened to
+/// fill `width`, with a `top`/`bot` y-axis label. Returns (rows, total columns).
+fn render_bars(
+    cols: &[(i64, Color)],
+    height: usize,
+    label_w: usize,
+    top: &str,
+    bot: &str,
+    width: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let (bar_w, gap, total) = bar_layout(cols.len(), width, label_w);
+    let mut lines = Vec::new();
+    for r in 0..height {
+        let rfb = (height - 1 - r) as i64;
+        let ylab = if r == 0 {
+            format!("{top:>label_w$}")
+        } else if r == height - 1 {
+            format!("{bot:>label_w$}")
+        } else {
+            " ".repeat(label_w)
+        };
+        let axis = if r == height - 1 { '┼' } else { '┤' };
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled(format!("{ylab} {axis}"), dim()),
+        ];
+        for &(fl, color) in cols {
+            let e = fl - rfb * 8;
+            let ch = if e >= 8 {
+                '█'
+            } else if e <= 0 {
+                ' '
+            } else {
+                BLOCKS[e as usize]
+            };
+            spans.push(Span::styled(
+                ch.to_string().repeat(bar_w),
+                Style::default().fg(color),
+            ));
+            if gap > 0 {
+                spans.push(Span::raw(" ".repeat(gap)));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    (lines, total)
+}
 
 /// Everything the stats renderer needs for one frame.
 pub struct StatsFrame<'a> {
@@ -523,6 +585,8 @@ pub struct StatsFrame<'a> {
     pub spinner: usize,
     pub loading: bool,
     pub selected: Option<usize>,
+    /// Terminal width, so the chart fills it.
+    pub width: u16,
 }
 
 pub fn build_stats_lines(f: &StatsFrame) -> Vec<Line<'static>> {
@@ -564,7 +628,12 @@ pub fn build_stats_lines(f: &StatsFrame) -> Vec<Line<'static>> {
 
     // Full-width stars chart for the selected repo.
     if let Some(sel) = f.selected.and_then(|i| f.rows.get(i)) {
-        for l in star_chart(&sel.stats.repo, &sel.trend, sel.stats.snapshot.stars) {
+        for l in star_chart(
+            &sel.stats.repo,
+            &sel.trend,
+            sel.stats.snapshot.stars,
+            f.width as usize,
+        ) {
             lines.push(l);
         }
     }
@@ -588,7 +657,7 @@ fn stats_header_line(f: &StatsFrame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   ↑↓ select · t CI view · g rate · r refresh · q quit".to_string(),
+            "   ↑↓ select · t CI · g rate · +/− speed · q quit".to_string(),
             dim(),
         ));
     }
@@ -686,7 +755,12 @@ fn delta_cell(cur: i64, prev: Option<i64>) -> (Vec<Span<'static>>, usize) {
 }
 
 /// A full-width block chart of a repo's star history.
-fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'static>> {
+fn star_chart(
+    repo: &str,
+    trend: &[(String, i64)],
+    current: i64,
+    width: usize,
+) -> Vec<Line<'static>> {
     let short = short_name(repo);
     if trend.len() < 2 {
         return vec![Line::from(vec![
@@ -699,10 +773,11 @@ fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'st
         ])];
     }
 
+    let cap = chart_capacity(width, 6);
     let pts: Vec<(&str, i64)> = trend
         .iter()
         .rev()
-        .take(CHART_W)
+        .take(cap)
         .rev()
         .map(|(d, v)| (d.as_str(), *v))
         .collect();
@@ -711,6 +786,7 @@ fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'st
     let minv = vals.iter().copied().min().unwrap_or(0);
     let maxv = vals.iter().copied().max().unwrap_or(0);
     let lw = digits(maxv).max(digits(minv));
+    let (_, _, total) = bar_layout(n, width, lw);
 
     let mut lines = vec![Line::from(vec![
         Span::raw("  "),
@@ -723,53 +799,36 @@ fn star_chart(repo: &str, trend: &[(String, i64)], current: i64) -> Vec<Line<'st
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(format!("{maxv:>lw$} ┤"), dim()),
-            Span::styled("─".repeat(n), Style::default().fg(Color::Green)),
+            Span::styled("─".repeat(total), Style::default().fg(Color::Green)),
         ]));
     } else {
         let levels = (CHART_H * 8) as f64;
-        let filled: Vec<i64> = vals
+        let cols: Vec<(i64, Color)> = vals
             .iter()
-            .map(|&v| (((v - minv) as f64 / (maxv - minv) as f64) * levels).round() as i64)
+            .map(|&v| {
+                let fl = (((v - minv) as f64 / (maxv - minv) as f64) * levels).round() as i64;
+                (fl, Color::Green)
+            })
             .collect();
-        for r in 0..CHART_H {
-            let rfb = (CHART_H - 1 - r) as i64;
-            let ylab = if r == 0 {
-                format!("{maxv:>lw$}")
-            } else if r == CHART_H - 1 {
-                format!("{minv:>lw$}")
-            } else {
-                " ".repeat(lw)
-            };
-            let axis = if r == CHART_H - 1 { '┼' } else { '┤' };
-            let bar: String = filled
-                .iter()
-                .map(|&fl| {
-                    let e = fl - rfb * 8;
-                    if e >= 8 {
-                        '█'
-                    } else if e <= 0 {
-                        ' '
-                    } else {
-                        BLOCKS[e as usize]
-                    }
-                })
-                .collect();
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("{ylab} {axis}"), dim()),
-                Span::styled(bar, Style::default().fg(Color::Green)),
-            ]));
-        }
+        let (rows, _) = render_bars(
+            &cols,
+            CHART_H,
+            lw,
+            &maxv.to_string(),
+            &minv.to_string(),
+            width,
+        );
+        lines.extend(rows);
     }
 
     // X axis + first/last date labels.
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(format!("{} └{}", " ".repeat(lw), "─".repeat(n)), dim()),
+        Span::styled(format!("{} └{}", " ".repeat(lw), "─".repeat(total)), dim()),
     ]));
     let first = pts.first().map(|(d, _)| short_date(d)).unwrap_or_default();
     let last = pts.last().map(|(d, _)| short_date(d)).unwrap_or_default();
-    let gap = n.saturating_sub(first.len() + last.len()).max(1);
+    let gap = total.saturating_sub(first.len() + last.len()).max(1);
     lines.push(Line::from(Span::styled(
         format!("  {} {first}{}{last}", " ".repeat(lw), " ".repeat(gap)),
         dim(),
@@ -865,7 +924,7 @@ fn rate_header_line(f: &RateFrame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   g CI view · r refresh · q quit".to_string(),
+            "   g CI · +/− speed · q quit".to_string(),
             dim(),
         ));
     }
@@ -951,7 +1010,7 @@ fn rate_reset_cell(reset: DateTime<Utc>, now: DateTime<Local>) -> (Vec<Span<'sta
 }
 
 // ── workflow detail view ─────────────────────────────────────────
-const DETAIL_CHART_H: usize = 8;
+const DETAIL_CHART_H: usize = 16;
 
 /// Everything the workflow-detail renderer needs for one frame.
 pub struct DetailFrame<'a> {
@@ -962,6 +1021,8 @@ pub struct DetailFrame<'a> {
     pub watch: Option<WatchInfo>,
     pub spinner: usize,
     pub loading: bool,
+    /// Terminal width, so the chart fills it.
+    pub width: u16,
 }
 
 pub fn build_detail_lines(f: &DetailFrame) -> Vec<Line<'static>> {
@@ -998,7 +1059,7 @@ pub fn build_detail_lines(f: &DetailFrame) -> Vec<Line<'static>> {
 
     lines.push(detail_summary_line(detail));
     lines.push(Line::from(""));
-    for l in duration_chart(&detail.runs) {
+    for l in duration_chart(&detail.runs, f.width as usize) {
         lines.push(l);
     }
     lines.push(Line::from(""));
@@ -1033,7 +1094,7 @@ fn detail_header_line(f: &DetailFrame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   esc back · r refresh · q quit".to_string(),
+            "   esc back · r rerun · +/− speed · q quit".to_string(),
             dim(),
         ));
     }
@@ -1087,10 +1148,11 @@ fn dot_color(d: Dot) -> Color {
     }
 }
 
-/// A per-column-colored block bar chart of run durations (baseline 0).
-fn duration_chart(runs: &[RunPoint]) -> Vec<Line<'static>> {
-    let pts: Vec<&RunPoint> = runs.iter().rev().take(CHART_W).rev().collect();
-    let n = pts.len();
+/// A per-column-colored block bar chart of run durations (baseline 0), widened
+/// to fill the terminal.
+fn duration_chart(runs: &[RunPoint], width: usize) -> Vec<Line<'static>> {
+    let cap = chart_capacity(width, 6);
+    let pts: Vec<&RunPoint> = runs.iter().rev().take(cap).rev().collect();
     let maxv = pts
         .iter()
         .map(|r| r.duration_secs)
@@ -1100,50 +1162,30 @@ fn duration_chart(runs: &[RunPoint]) -> Vec<Line<'static>> {
     let top_label = fmt_duration(maxv);
     let label_w = top_label.chars().count().max(2);
     let levels = (DETAIL_CHART_H * 8) as f64;
-    let filled: Vec<i64> = pts
+    let cols: Vec<(i64, Color)> = pts
         .iter()
-        .map(|r| ((r.duration_secs as f64 / maxv as f64) * levels).round() as i64)
+        .map(|r| {
+            let fl = ((r.duration_secs as f64 / maxv as f64) * levels).round() as i64;
+            (fl, dot_color(r.dot))
+        })
         .collect();
 
-    let mut lines = Vec::new();
-    for r in 0..DETAIL_CHART_H {
-        let rfb = (DETAIL_CHART_H - 1 - r) as i64;
-        let ylab = if r == 0 {
-            format!("{top_label:>label_w$}")
-        } else if r == DETAIL_CHART_H - 1 {
-            format!("{:>label_w$}", "0")
-        } else {
-            " ".repeat(label_w)
-        };
-        let axis = if r == DETAIL_CHART_H - 1 {
-            '┼'
-        } else {
-            '┤'
-        };
-        let mut spans = vec![
-            Span::raw("  "),
-            Span::styled(format!("{ylab} {axis}"), dim()),
-        ];
-        for (i, &fl) in filled.iter().enumerate() {
-            let e = fl - rfb * 8;
-            let ch = if e >= 8 {
-                '█'
-            } else if e <= 0 {
-                ' '
-            } else {
-                BLOCKS[e as usize]
-            };
-            spans.push(Span::styled(
-                ch.to_string(),
-                Style::default().fg(dot_color(pts[i].dot)),
-            ));
-        }
-        lines.push(Line::from(spans));
-    }
+    let (mut lines, total) = render_bars(&cols, DETAIL_CHART_H, label_w, &top_label, "0", width);
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(format!("{} └{}", " ".repeat(label_w), "─".repeat(n)), dim()),
+        Span::styled(
+            format!("{} └{}", " ".repeat(label_w), "─".repeat(total)),
+            dim(),
+        ),
     ]));
+    let fmt_d = |r: &&RunPoint| r.started.with_timezone(&Local).format("%m-%d").to_string();
+    let first = pts.first().map(fmt_d).unwrap_or_default();
+    let last = pts.last().map(fmt_d).unwrap_or_default();
+    let gap = total.saturating_sub(first.len() + last.len()).max(1);
+    lines.push(Line::from(Span::styled(
+        format!("  {} {first}{}{last}", " ".repeat(label_w), " ".repeat(gap)),
+        dim(),
+    )));
     lines
 }
 
@@ -1204,6 +1246,7 @@ mod tests {
             spinner: 0,
             loading: false,
             selected: Some(0),
+            width: 120,
         };
         let txt = lines_to_ansi(&build_stats_lines(&f));
 
@@ -1271,6 +1314,7 @@ mod tests {
             watch: None,
             spinner: 0,
             loading: false,
+            width: 120,
         };
         let txt = lines_to_ansi(&build_detail_lines(&f));
         assert!(txt.contains("CI"), "workflow name shown");
@@ -1305,6 +1349,7 @@ mod tests {
             spinner: 0,
             loading: false,
             selected: Some(0),
+            width: 120,
         };
         let txt = lines_to_ansi(&build_stats_lines(&f));
         assert!(
