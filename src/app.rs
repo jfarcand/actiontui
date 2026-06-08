@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 use chrono::{Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use octocrab::Octocrab;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
+use crate::github::GhClient;
 use crate::model::{RateBucket, RateRow, RepoResult, RepoStats, StatsRow, WorkflowDetail};
 use crate::state::State;
 use crate::statsdb::StatsDb;
@@ -88,7 +88,7 @@ struct DetailTarget {
 const MAX_WATCH: Duration = Duration::from_secs(6 * 3600);
 
 pub struct App {
-    octo: Arc<Octocrab>,
+    octo: Arc<GhClient>,
     repos: Vec<String>,
     branch: String,
     aggregate: bool,
@@ -132,7 +132,7 @@ pub struct App {
 impl App {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        octo: Octocrab,
+        octo: GhClient,
         repos: Vec<String>,
         branch: String,
         aggregate: bool,
@@ -683,7 +683,7 @@ impl App {
 }
 
 /// Fetch stats for every repo concurrently.
-pub async fn fetch_stats_all(octo: &Octocrab, repos: &[String]) -> Vec<RepoStats> {
+pub async fn fetch_stats_all(octo: &GhClient, repos: &[String]) -> Vec<RepoStats> {
     let futs = repos.iter().map(|r| crate::github::fetch_stats(octo, r));
     futures::future::join_all(futs).await
 }
@@ -725,7 +725,7 @@ fn open_url(url: &str) {
 }
 
 /// Build the active-workflow-id map for a one-shot run (no cache available).
-pub async fn fetch_active_map(octo: &Octocrab, repos: &[String]) -> HashMap<String, HashSet<u64>> {
+pub async fn fetch_active_map(octo: &GhClient, repos: &[String]) -> HashMap<String, HashSet<u64>> {
     let mut m = HashMap::new();
     for r in repos {
         if let Ok(set) = crate::github::fetch_active_workflow_ids(octo, r).await {
@@ -737,7 +737,7 @@ pub async fn fetch_active_map(octo: &Octocrab, repos: &[String]) -> HashMap<Stri
 
 /// Fetch every repo concurrently, using the cached active-workflow-id map.
 pub async fn fetch_all(
-    octo: &Octocrab,
+    octo: &GhClient,
     repos: &[String],
     branch: &str,
     exclude: &[String],

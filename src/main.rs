@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
 }
 
 /// One-shot snapshot: fetch, notify on transitions, print an ANSI table.
-async fn run_once(octo: octocrab::Octocrab, settings: &Settings, paths: &Paths) -> Result<()> {
+async fn run_once(octo: github::GhClient, settings: &Settings, paths: &Paths) -> Result<()> {
     let active = app::fetch_active_map(&octo, &settings.repos).await;
     let results = app::fetch_all(
         &octo,

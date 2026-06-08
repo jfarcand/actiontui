@@ -11,13 +11,13 @@ keywords = ["github", "actions", "ci", "tui", "ratatui"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-chrono = "0.4.45"
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 dirs = "6.0.0"
 futures = "0.3.32"
-octocrab = "0.53.0"
 ratatui = "0.30.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "default-tls", "http2", "charset"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! GitHub REST access via octocrab. One page of runs per repo is fetched and
-//! everything (latest-per-workflow, recent history, fail-since, ETA) is derived
-//! client-side — far fewer API calls than the original per-workflow approach.
+//! GitHub REST access via a thin `reqwest` client with conditional-request
+//! caching. Each GET stores the response `ETag` and replays `If-None-Match` on
+//! the next call; an unchanged resource returns `304 Not Modified`, which GitHub
+//! does NOT count against the rate limit — so steady-state polling is ~free.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use octocrab::Octocrab;
+use reqwest::header::{ACCEPT, ETAG, IF_NONE_MATCH};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result};
 use crate::model::{
@@ -16,6 +19,97 @@ use crate::model::{
 
 const RECENT_COUNT: usize = 6;
 const RUN_PAGE_SIZE: usize = 100;
+const API_BASE: &str = "https://api.github.com";
+
+#[derive(Clone)]
+struct CacheEntry {
+    etag: String,
+    body: Vec<u8>,
+}
+
+/// Authenticated GitHub client with per-URL `ETag` caching.
+pub struct GhClient {
+    http: reqwest::Client,
+    token: String,
+    etags: Mutex<HashMap<String, CacheEntry>>,
+}
+
+impl GhClient {
+    /// GET a JSON resource, using a conditional request when we have an `ETag`.
+    pub async fn get<T: DeserializeOwned>(&self, route: &str) -> Result<T> {
+        let bytes = self.get_bytes(route).await?;
+        serde_json::from_slice(&bytes).map_err(|e| Error::GitHub(format!("decoding {route}: {e}")))
+    }
+
+    async fn get_bytes(&self, route: &str) -> Result<Vec<u8>> {
+        let url = format!("{API_BASE}{route}");
+        let cached = self.cache_get(&url);
+
+        let mut req = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.token)
+            .header(ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(c) = &cached {
+            req = req.header(IF_NONE_MATCH, c.etag.clone());
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| Error::GitHub(format!("request to {route} failed: {e}")))?;
+
+        // 304 → nothing changed; serve the cached body (free, no rate-limit cost).
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED
+            && let Some(c) = cached
+        {
+            return Ok(c.body);
+        }
+
+        let status = resp.status();
+        let etag = resp
+            .headers()
+            .get(ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| Error::GitHub(format!("reading {route}: {e}")))?
+            .to_vec();
+
+        if !status.is_success() {
+            let msg: String = String::from_utf8_lossy(&bytes).chars().take(200).collect();
+            return Err(Error::GitHub(format!("{route}: {status} {msg}")));
+        }
+        if let Some(etag) = etag {
+            self.cache_put(
+                url,
+                CacheEntry {
+                    etag,
+                    body: bytes.clone(),
+                },
+            );
+        }
+        Ok(bytes)
+    }
+
+    fn cache_get(&self, url: &str) -> Option<CacheEntry> {
+        self.etags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(url)
+            .cloned()
+    }
+
+    fn cache_put(&self, url: String, entry: CacheEntry) {
+        self.etags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(url, entry);
+    }
+}
 
 #[derive(Deserialize)]
 struct RunsResponse {
@@ -59,16 +153,18 @@ struct ApiWorkflow {
 
 /// Build an authenticated client, pulling the token from `gh auth token`
 /// (falls back to `GITHUB_TOKEN` / `GH_TOKEN`).
-pub fn build_client() -> Result<Octocrab> {
-    let token = gh_token().ok_or_else(|| {
-        Error::GitHub(
-            "no GitHub token found — run `gh auth login`, or set GITHUB_TOKEN/GH_TOKEN".into(),
-        )
-    })?;
-    Octocrab::builder()
-        .personal_token(token)
+pub fn build_client() -> Result<GhClient> {
+    let token = gh_token()
+        .ok_or_else(|| Error::GitHub("no GitHub token found — run `gh auth login`".into()))?;
+    let http = reqwest::Client::builder()
+        .user_agent("actiontui")
         .build()
-        .map_err(|e| Error::GitHub(format!("failed to build GitHub client: {e}")))
+        .map_err(|e| Error::GitHub(format!("building HTTP client: {e}")))?;
+    Ok(GhClient {
+        http,
+        token,
+        etags: Mutex::new(HashMap::new()),
+    })
 }
 
 fn gh_token() -> Option<String> {
@@ -93,15 +189,16 @@ fn gh_token() -> Option<String> {
 /// Fetch and derive the workflow rows for a single repo + branch.
 ///
 /// `exclude` holds case-insensitive substrings; any workflow whose name matches
-/// one is dropped (so it also can't trigger a notification).
+/// one is dropped (so it also can't trigger a notification). `active` is the
+/// caller-cached set of non-deleted workflow ids.
 pub async fn fetch_repo(
-    octo: &Octocrab,
+    client: &GhClient,
     repo: &str,
     branch: &str,
     exclude: &[String],
     active: &HashSet<u64>,
 ) -> RepoResult {
-    match fetch_repo_inner(octo, repo, branch, exclude, active).await {
+    match fetch_repo_inner(client, repo, branch, exclude, active).await {
         Ok(rows) => RepoResult {
             repo: repo.to_string(),
             rows,
@@ -116,20 +213,17 @@ pub async fn fetch_repo(
 }
 
 async fn fetch_repo_inner(
-    octo: &Octocrab,
+    client: &GhClient,
     repo: &str,
     branch: &str,
     exclude: &[String],
     active: &HashSet<u64>,
 ) -> Result<Vec<WorkflowRow>> {
-    let runs_route = format!(
+    let route = format!(
         "/repos/{repo}/actions/runs?branch={branch}&per_page={RUN_PAGE_SIZE}",
         branch = urlencode(branch),
     );
-    let resp: RunsResponse = octo
-        .get(&runs_route, None::<&()>)
-        .await
-        .map_err(|e| Error::GitHub(format!("fetching runs for {repo}: {e}")))?;
+    let resp: RunsResponse = client.get(&route).await?;
 
     // Group runs by workflow, filtering to active workflows when we know them.
     let mut groups: HashMap<u64, Vec<ApiRun>> = HashMap::new();
@@ -142,7 +236,6 @@ async fn fetch_repo_inner(
 
     let mut rows = Vec::with_capacity(groups.len());
     for (workflow_id, mut group) in groups {
-        // Newest first.
         group.sort_by_key(|r| std::cmp::Reverse(r.started()));
         let latest = &group[0];
 
@@ -153,7 +246,7 @@ async fn fetch_repo_inner(
         rows.push(WorkflowRow {
             workflow_name: latest.name.clone().unwrap_or_else(|| "unknown".into()),
             workflow_id,
-            badge: badge.clone(),
+            badge,
             started_at: Some(latest.started()),
             finished_at: (status == "completed").then_some(latest.updated_at),
             eta_total_secs: estimate_duration(&group),
@@ -192,11 +285,8 @@ struct RepoInfo {
 struct PullStub {}
 
 /// Fetch a repo's headline stats (stars/forks/watchers/issues/PRs).
-///
-/// `open_issues_count` includes PRs, so we count open PRs separately and
-/// subtract to isolate true issues.
-pub async fn fetch_stats(octo: &Octocrab, repo: &str) -> RepoStats {
-    match fetch_stats_inner(octo, repo).await {
+pub async fn fetch_stats(client: &GhClient, repo: &str) -> RepoStats {
+    match fetch_stats_inner(client, repo).await {
         Ok((canonical, snapshot)) => RepoStats {
             repo: canonical,
             snapshot,
@@ -210,15 +300,10 @@ pub async fn fetch_stats(octo: &Octocrab, repo: &str) -> RepoStats {
     }
 }
 
-async fn fetch_stats_inner(octo: &Octocrab, repo: &str) -> Result<(String, Snapshot)> {
-    let info: RepoInfo = octo
-        .get(&format!("/repos/{repo}"), None::<&()>)
-        .await
-        .map_err(|e| Error::GitHub(format!("fetching repo {repo}: {e}")))?;
-
-    let prs = open_pr_count(octo, &info.full_name).await.unwrap_or(0);
+async fn fetch_stats_inner(client: &GhClient, repo: &str) -> Result<(String, Snapshot)> {
+    let info: RepoInfo = client.get(&format!("/repos/{repo}")).await?;
+    let prs = open_pr_count(client, &info.full_name).await.unwrap_or(0);
     let issues = (info.open_issues_count - prs).max(0);
-
     let snapshot = Snapshot {
         stars: info.stargazers_count,
         forks: info.forks_count,
@@ -231,16 +316,17 @@ async fn fetch_stats_inner(octo: &Octocrab, repo: &str) -> Result<(String, Snaps
 
 /// Open PR count via the pulls endpoint (caps at one page of 100 — plenty, and
 /// avoids the search API's permission/rate-limit pitfalls on private repos).
-async fn open_pr_count(octo: &Octocrab, repo: &str) -> Result<i64> {
-    let route = format!("/repos/{repo}/pulls?state=open&per_page=100");
-    let pulls: Vec<PullStub> = octo.get(&route, None::<&()>).await?;
+async fn open_pr_count(client: &GhClient, repo: &str) -> Result<i64> {
+    let pulls: Vec<PullStub> = client
+        .get(&format!("/repos/{repo}/pulls?state=open&per_page=100"))
+        .await?;
     Ok(pulls.len() as i64)
 }
 
 /// Fetch a single workflow's run history over the last `days`, for the detail
 /// chart. Returns runs oldest → newest.
 pub async fn fetch_workflow_detail(
-    octo: &Octocrab,
+    client: &GhClient,
     repo: &str,
     workflow_id: u64,
     workflow: &str,
@@ -251,8 +337,8 @@ pub async fn fetch_workflow_detail(
         "/repos/{repo}/actions/workflows/{workflow_id}/runs?branch={branch}&per_page=100",
         branch = urlencode(branch),
     );
-    let resp: RunsResponse = octo
-        .get(&route, None::<&()>)
+    let resp: RunsResponse = client
+        .get(&route)
         .await
         .map_err(|e| Error::GitHub(format!("fetching runs for {workflow}: {e}")))?;
 
@@ -304,11 +390,8 @@ struct ApiRate {
 
 /// Fetch all GitHub API rate-limit buckets. The `rate_limit` endpoint is free —
 /// it does not count against any bucket — so it's safe to poll.
-pub async fn fetch_rate(octo: &Octocrab) -> Result<Vec<RateBucket>> {
-    let resp: RateLimitResponse = octo
-        .get("/rate_limit", None::<&()>)
-        .await
-        .map_err(|e| Error::GitHub(format!("fetching rate limit: {e}")))?;
+pub async fn fetch_rate(client: &GhClient) -> Result<Vec<RateBucket>> {
+    let resp: RateLimitResponse = client.get("/rate_limit").await?;
     let mut buckets: Vec<RateBucket> = resp
         .resources
         .into_iter()
@@ -326,9 +409,10 @@ pub async fn fetch_rate(octo: &Octocrab) -> Result<Vec<RateBucket>> {
 
 /// Active (non-deleted, non-disabled) workflow ids for a repo. Cached by the
 /// caller and refreshed infrequently — this list rarely changes.
-pub async fn fetch_active_workflow_ids(octo: &Octocrab, repo: &str) -> Result<HashSet<u64>> {
-    let route = format!("/repos/{repo}/actions/workflows?per_page=100");
-    let resp: WorkflowsResponse = octo.get(&route, None::<&()>).await?;
+pub async fn fetch_active_workflow_ids(client: &GhClient, repo: &str) -> Result<HashSet<u64>> {
+    let resp: WorkflowsResponse = client
+        .get(&format!("/repos/{repo}/actions/workflows?per_page=100"))
+        .await?;
     Ok(resp
         .workflows
         .into_iter()

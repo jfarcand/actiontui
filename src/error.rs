@@ -37,8 +37,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<octocrab::Error> for Error {
-    fn from(e: octocrab::Error) -> Self {
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
         Self::GitHub(e.to_string())
     }
 }
