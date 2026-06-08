@@ -79,7 +79,15 @@ async fn main() -> Result<()> {
 
 /// One-shot snapshot: fetch, notify on transitions, print an ANSI table.
 async fn run_once(octo: octocrab::Octocrab, settings: &Settings, paths: &Paths) -> Result<()> {
-    let results = app::fetch_all(&octo, &settings.repos, &settings.branch, &settings.exclude).await;
+    let active = app::fetch_active_map(&octo, &settings.repos).await;
+    let results = app::fetch_all(
+        &octo,
+        &settings.repos,
+        &settings.branch,
+        &settings.exclude,
+        &active,
+    )
+    .await;
 
     let mut state = State::load(&paths.state_file);
     let transitions = state.diff(&results);

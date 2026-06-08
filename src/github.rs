@@ -99,8 +99,9 @@ pub async fn fetch_repo(
     repo: &str,
     branch: &str,
     exclude: &[String],
+    active: &HashSet<u64>,
 ) -> RepoResult {
-    match fetch_repo_inner(octo, repo, branch, exclude).await {
+    match fetch_repo_inner(octo, repo, branch, exclude, active).await {
         Ok(rows) => RepoResult {
             repo: repo.to_string(),
             rows,
@@ -119,9 +120,8 @@ async fn fetch_repo_inner(
     repo: &str,
     branch: &str,
     exclude: &[String],
+    active: &HashSet<u64>,
 ) -> Result<Vec<WorkflowRow>> {
-    let active = active_workflow_ids(octo, repo).await.unwrap_or_default();
-
     let runs_route = format!(
         "/repos/{repo}/actions/runs?branch={branch}&per_page={RUN_PAGE_SIZE}",
         branch = urlencode(branch),
@@ -324,7 +324,9 @@ pub async fn fetch_rate(octo: &Octocrab) -> Result<Vec<RateBucket>> {
     Ok(buckets)
 }
 
-async fn active_workflow_ids(octo: &Octocrab, repo: &str) -> Result<HashSet<u64>> {
+/// Active (non-deleted, non-disabled) workflow ids for a repo. Cached by the
+/// caller and refreshed infrequently — this list rarely changes.
+pub async fn fetch_active_workflow_ids(octo: &Octocrab, repo: &str) -> Result<HashSet<u64>> {
     let route = format!("/repos/{repo}/actions/workflows?per_page=100");
     let resp: WorkflowsResponse = octo.get(&route, None::<&()>).await?;
     Ok(resp

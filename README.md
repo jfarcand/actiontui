@@ -118,7 +118,9 @@ exclude = ["Update #", "in /."]   # drops Dependabot version-update runs
 
 ## How it works
 
-For each repo, actiontui fetches one page (100) of workflow runs for the branch plus the list of active workflows, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the head commit, and the ETA (most recent successful run's wall-clock duration). State transitions are detected by diffing against the persisted `state.json`. The Stats view fetches each repo's metrics and writes a daily snapshot to SQLite, computing deltas against the most recent prior day.
+For each repo, actiontui fetches one page (100) of workflow runs for the branch, then derives — entirely client-side — the latest run per workflow, the recent-history dots, the head commit, and the ETA (most recent successful run's wall-clock duration). The list of active workflows (used to hide deleted ones) is fetched and **cached for ~10 minutes**, so steady-state watching is **one API call per repo per refresh**. State transitions are detected by diffing against the persisted `state.json`. The Stats view fetches each repo's metrics and writes a daily snapshot to SQLite, computing deltas against the most recent prior day.
+
+**API cost:** watch mode is the only thing that polls — roughly `repos / interval` core-API calls per second. With 12 repos at 60s that's ~12 calls/minute against GitHub's 5000/hour `core` budget. Raise the interval (`-w 120`, or `+` in the TUI) to spend less; the **Rate-limit view** (`g`) shows your remaining quota, and `rate_limit` itself is free to poll.
 
 ## Development
 

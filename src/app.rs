@@ -2,7 +2,7 @@
 //! Watch-mode TUI: a live, alt-screen dashboard with background refresh,
 //! spinner animation, keyboard control, and a hard auto-exit ceiling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,13 +30,17 @@ enum View {
     Detail,
 }
 
-/// A background-fetch result delivered over the channel.
+/// A background-fetch result delivered over the channel. `Ci` carries a fresh
+/// active-workflow-id map only when it was re-fetched (cached otherwise).
 enum Msg {
-    Ci(Vec<RepoResult>),
+    Ci(Vec<RepoResult>, Option<HashMap<String, HashSet<u64>>>),
     Stats(Vec<RepoStats>),
     Rate(Vec<RateBucket>),
     Detail(Box<WorkflowDetail>),
 }
+
+/// How long to reuse the cached active-workflow-id map before re-fetching it.
+const ACTIVE_IDS_TTL: Duration = Duration::from_secs(600);
 
 /// API quota below which the rate view fires a one-shot alert.
 const RATE_ALERT_THRESHOLD: i64 = 1000;
@@ -93,6 +97,9 @@ pub struct App {
     interval: Duration,
 
     results: Vec<RepoResult>,
+    /// Cached active-workflow ids per repo (refreshed every `ACTIVE_IDS_TTL`).
+    active_ids: HashMap<String, HashSet<u64>>,
+    active_ids_at: Option<Instant>,
     loading: bool,
     spinner: usize,
     last_refresh: Instant,
@@ -146,6 +153,8 @@ impl App {
             exclude,
             interval: Duration::from_secs(interval_secs.max(5)),
             results: Vec::new(),
+            active_ids: HashMap::new(),
+            active_ids_at: None,
             loading: false,
             spinner: 0,
             last_refresh: now,
@@ -212,7 +221,7 @@ impl App {
                 }
                 Some(msg) = rx.recv() => {
                     match msg {
-                        Msg::Ci(results) => self.apply(results),
+                        Msg::Ci(results, ids) => self.apply(results, ids),
                         Msg::Stats(stats) => self.apply_stats(stats),
                         Msg::Rate(buckets) => self.apply_rate(buckets),
                         Msg::Detail(detail) => self.apply_detail(*detail),
@@ -235,16 +244,33 @@ impl App {
     }
 
     /// Spawn a background CI fetch for all repos; results arrive over the channel.
+    /// The active-workflow-id map is reused from cache and only re-fetched once
+    /// per `ACTIVE_IDS_TTL`, which halves the API calls in steady state.
     fn trigger_refresh(&mut self, tx: &mpsc::Sender<Msg>) {
         self.loading = true;
         let octo = Arc::clone(&self.octo);
         let repos = self.repos.clone();
         let branch = self.branch.clone();
         let exclude = self.exclude.clone();
+        let refresh_ids = self
+            .active_ids_at
+            .is_none_or(|t| t.elapsed() > ACTIVE_IDS_TTL);
+        let ids = self.active_ids.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let results = fetch_all(&octo, &repos, &branch, &exclude).await;
-            let _ = tx.send(Msg::Ci(results)).await;
+            let (ids, updated) = if refresh_ids {
+                let mut m = ids;
+                for r in &repos {
+                    if let Ok(set) = crate::github::fetch_active_workflow_ids(&octo, r).await {
+                        m.insert(r.clone(), set);
+                    }
+                }
+                (m, true)
+            } else {
+                (ids, false)
+            };
+            let results = fetch_all(&octo, &repos, &branch, &exclude, &ids).await;
+            let _ = tx.send(Msg::Ci(results, updated.then_some(ids))).await;
         });
     }
 
@@ -432,7 +458,11 @@ impl App {
         }
     }
 
-    fn apply(&mut self, results: Vec<RepoResult>) {
+    fn apply(&mut self, results: Vec<RepoResult>, ids: Option<HashMap<String, HashSet<u64>>>) {
+        if let Some(ids) = ids {
+            self.active_ids = ids;
+            self.active_ids_at = Some(Instant::now());
+        }
         let transitions = self.state.diff(&results);
         crate::notify::announce(&transitions, &self.branch, self.sound);
         self.state.commit(&results);
@@ -694,15 +724,29 @@ fn open_url(url: &str) {
     }
 }
 
-/// Fetch every repo concurrently.
+/// Build the active-workflow-id map for a one-shot run (no cache available).
+pub async fn fetch_active_map(octo: &Octocrab, repos: &[String]) -> HashMap<String, HashSet<u64>> {
+    let mut m = HashMap::new();
+    for r in repos {
+        if let Ok(set) = crate::github::fetch_active_workflow_ids(octo, r).await {
+            m.insert(r.clone(), set);
+        }
+    }
+    m
+}
+
+/// Fetch every repo concurrently, using the cached active-workflow-id map.
 pub async fn fetch_all(
     octo: &Octocrab,
     repos: &[String],
     branch: &str,
     exclude: &[String],
+    active: &HashMap<String, HashSet<u64>>,
 ) -> Vec<RepoResult> {
-    let futs = repos
-        .iter()
-        .map(|r| crate::github::fetch_repo(octo, r, branch, exclude));
+    let empty = HashSet::new();
+    let futs = repos.iter().map(|r| {
+        let ids = active.get(r).unwrap_or(&empty);
+        crate::github::fetch_repo(octo, r, branch, exclude, ids)
+    });
     futures::future::join_all(futs).await
 }
