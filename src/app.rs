@@ -16,10 +16,10 @@ use ratatui::widgets::Paragraph;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
-use crate::model::{RateBucket, RateRow, RepoResult, RepoStats, StatsRow};
+use crate::model::{RateBucket, RateRow, RepoResult, RepoStats, StatsRow, WorkflowDetail};
 use crate::state::State;
 use crate::statsdb::StatsDb;
-use crate::ui::{self, Frame, RateFrame, StatsFrame, WatchInfo};
+use crate::ui::{self, DetailFrame, Frame, RateFrame, StatsFrame, WatchInfo};
 
 /// Which view is on screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -27,6 +27,7 @@ enum View {
     Ci,
     Stats,
     Rate,
+    Detail,
 }
 
 /// A background-fetch result delivered over the channel.
@@ -34,10 +35,14 @@ enum Msg {
     Ci(Vec<RepoResult>),
     Stats(Vec<RepoStats>),
     Rate(Vec<RateBucket>),
+    Detail(Box<WorkflowDetail>),
 }
 
 /// API quota below which the rate view fires a one-shot alert.
 const RATE_ALERT_THRESHOLD: i64 = 1000;
+
+/// Time window for the workflow detail chart.
+const DETAIL_DAYS: u32 = 7;
 
 /// Which view the TUI opens in.
 #[derive(Clone, Copy)]
@@ -51,6 +56,7 @@ pub enum StartView {
 struct Sel {
     repo: String,
     run_id: u64,
+    workflow_id: u64,
     workflow: String,
     sha: Option<String>,
 }
@@ -93,6 +99,9 @@ pub struct App {
     rate_loaded: bool,
     rate_prev_used: HashMap<String, i64>,
     rate_alert_fired: bool,
+    /// Drilled-in workflow detail target: (repo, workflow id, name) + data.
+    detail_target: Option<(String, u64, String)>,
+    detail: Option<WorkflowDetail>,
 
     /// Index into the active view's rows.
     selected: usize,
@@ -143,6 +152,8 @@ impl App {
             rate_loaded: false,
             rate_prev_used: HashMap::new(),
             rate_alert_fired: false,
+            detail_target: None,
+            detail: None,
             selected: 0,
             confirm: None,
             status: None,
@@ -193,6 +204,7 @@ impl App {
                         Msg::Ci(results) => self.apply(results),
                         Msg::Stats(stats) => self.apply_stats(stats),
                         Msg::Rate(buckets) => self.apply_rate(buckets),
+                        Msg::Detail(detail) => self.apply_detail(*detail),
                     }
                 }
             }
@@ -207,6 +219,7 @@ impl App {
             View::Ci => self.trigger_refresh(tx),
             View::Stats => self.trigger_stats(tx),
             View::Rate => self.trigger_rate(tx),
+            View::Detail => self.trigger_detail(tx),
         }
     }
 
@@ -247,6 +260,53 @@ impl App {
                 Err(_) => tx.send(Msg::Rate(Vec::new())).await,
             };
         });
+    }
+
+    /// Drill into the selected CI row's workflow detail.
+    fn open_detail(&mut self, tx: &mpsc::Sender<Msg>) {
+        let rows = self.selectable();
+        let Some(s) = rows.get(self.selected) else {
+            return;
+        };
+        self.detail_target = Some((s.repo.clone(), s.workflow_id, s.workflow.clone()));
+        self.detail = None;
+        self.view = View::Detail;
+        if !self.loading {
+            self.trigger_detail(tx);
+        }
+    }
+
+    /// Spawn a background fetch of the drilled-in workflow's run history.
+    fn trigger_detail(&mut self, tx: &mpsc::Sender<Msg>) {
+        let Some((repo, workflow_id, workflow)) = self.detail_target.clone() else {
+            return;
+        };
+        self.loading = true;
+        let octo = Arc::clone(&self.octo);
+        let branch = self.branch.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let detail = crate::github::fetch_workflow_detail(
+                &octo,
+                &repo,
+                workflow_id,
+                &workflow,
+                &branch,
+                DETAIL_DAYS,
+            )
+            .await
+            .unwrap_or(WorkflowDetail {
+                days: DETAIL_DAYS,
+                runs: Vec::new(),
+            });
+            let _ = tx.send(Msg::Detail(Box::new(detail))).await;
+        });
+    }
+
+    fn apply_detail(&mut self, detail: WorkflowDetail) {
+        self.detail = Some(detail);
+        self.loading = false;
+        self.last_refresh = Instant::now();
     }
 
     /// Go to `target`, or back to CI if already there. Loads data on first entry.
@@ -344,7 +404,7 @@ impl App {
         match self.view {
             View::Ci => self.selectable().len(),
             View::Stats => self.stats.len(),
-            View::Rate => 0, // rate rows aren't selectable
+            View::Rate | View::Detail => 0, // not selectable
         }
     }
 
@@ -373,6 +433,7 @@ impl App {
                 out.push(Sel {
                     repo: repo.repo.clone(),
                     run_id: row.run_id,
+                    workflow_id: row.workflow_id,
                     workflow: row.workflow_name.clone(),
                     sha: row.head_sha.clone(),
                 });
@@ -447,7 +508,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('x') | KeyCode::Enter if in_ci => {
+            KeyCode::Char('x') if in_ci => {
                 let rows = self.selectable();
                 if let Some(s) = rows.get(self.selected) {
                     self.confirm = Some(Confirm {
@@ -457,6 +518,7 @@ impl App {
                     });
                 }
             }
+            KeyCode::Enter if in_ci => self.open_detail(tx),
             _ => {}
         }
         true
@@ -525,6 +587,21 @@ impl App {
                 spinner: self.spinner,
                 loading: self.loading,
             }),
+            View::Detail => {
+                let (repo, workflow) = self
+                    .detail_target
+                    .as_ref()
+                    .map_or(("", ""), |(r, _, w)| (r.as_str(), w.as_str()));
+                ui::build_detail_lines(&DetailFrame {
+                    repo,
+                    workflow,
+                    detail: self.detail.as_ref(),
+                    now: Local::now(),
+                    watch: Some(watch),
+                    spinner: self.spinner,
+                    loading: self.loading,
+                })
+            }
         };
         terminal.draw(|f| {
             f.render_widget(Paragraph::new(lines), f.area());

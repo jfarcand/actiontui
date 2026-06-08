@@ -76,6 +76,8 @@ pub enum Dot {
 #[derive(Clone, Debug)]
 pub struct WorkflowRow {
     pub workflow_name: String,
+    /// The workflow's database id (for fetching its run history).
+    pub workflow_id: u64,
     pub badge: Badge,
     pub started_at: Option<DateTime<Utc>>,
     /// Set only when the run has completed.
@@ -141,4 +143,20 @@ pub struct RateBucket {
 pub struct RateRow {
     pub bucket: RateBucket,
     pub delta_used: Option<i64>,
+}
+
+/// One run in a workflow's history, for the detail chart.
+#[derive(Clone, Debug)]
+pub struct RunPoint {
+    pub started: DateTime<Utc>,
+    /// Wall-clock duration in seconds (0 while still running).
+    pub duration_secs: i64,
+    pub dot: Dot,
+}
+
+/// A workflow's run history over a recent time window (oldest → newest).
+#[derive(Clone, Debug)]
+pub struct WorkflowDetail {
+    pub days: u32,
+    pub runs: Vec<RunPoint>,
 }

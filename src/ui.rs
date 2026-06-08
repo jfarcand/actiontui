@@ -6,7 +6,9 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::{Badge, Dot, RateRow, RepoResult, StatsRow, WorkflowRow};
+use crate::model::{
+    Badge, Dot, RateRow, RepoResult, RunPoint, StatsRow, WorkflowDetail, WorkflowRow,
+};
 
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -99,7 +101,7 @@ fn header_line(f: &Frame) -> Line<'static> {
             Style::default().fg(Color::Cyan),
         ));
         spans.push(Span::styled(
-            "   ↑↓ select · x rerun · o open · t stats · g rate · T test · r refresh · q quit"
+            "   ↑↓ select · ⏎ detail · x rerun · o open · t stats · g rate · r refresh · q quit"
                 .to_string(),
             dim(),
         ));
@@ -948,6 +950,203 @@ fn rate_reset_cell(reset: DateTime<Utc>, now: DateTime<Local>) -> (Vec<Span<'sta
     text_cell_w(&text, W_RATE_RESET, dim())
 }
 
+// ── workflow detail view ─────────────────────────────────────────
+const DETAIL_CHART_H: usize = 8;
+
+/// Everything the workflow-detail renderer needs for one frame.
+pub struct DetailFrame<'a> {
+    pub repo: &'a str,
+    pub workflow: &'a str,
+    pub detail: Option<&'a WorkflowDetail>,
+    pub now: DateTime<Local>,
+    pub watch: Option<WatchInfo>,
+    pub spinner: usize,
+    pub loading: bool,
+}
+
+pub fn build_detail_lines(f: &DetailFrame) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(detail_header_line(f));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{}/", f.repo), dim()),
+        Span::styled(f.workflow.to_string(), bold(Color::White)),
+    ]));
+    lines.push(Line::from(""));
+
+    let Some(detail) = f.detail else {
+        let msg = if f.loading {
+            "fetching run history…"
+        } else {
+            "no history"
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(msg.to_string(), dim()),
+        ]));
+        return lines;
+    };
+
+    if detail.runs.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("no runs in the last {} days", detail.days), dim()),
+        ]));
+        return lines;
+    }
+
+    lines.push(detail_summary_line(detail));
+    lines.push(Line::from(""));
+    for l in duration_chart(&detail.runs) {
+        lines.push(l);
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("bar height = run duration · ".to_string(), dim()),
+        Span::styled("█".to_string(), Style::default().fg(Color::Green)),
+        Span::styled(" pass  ".to_string(), dim()),
+        Span::styled("█".to_string(), Style::default().fg(Color::Red)),
+        Span::styled(" fail  ".to_string(), dim()),
+        Span::styled("◐".to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(" running".to_string(), dim()),
+    ]));
+    lines
+}
+
+fn detail_header_line(f: &DetailFrame) -> Line<'static> {
+    let days = f.detail.map_or(7, |d| d.days);
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(format!("Workflow — last {days} days"), bold(Color::Cyan)),
+        Span::styled(format!("  {}", f.now.format("%Y-%m-%d %H:%M:%S")), dim()),
+    ];
+    if let Some(w) = &f.watch {
+        let spin = if f.loading {
+            format!(" {} refreshing", SPINNER[f.spinner % SPINNER.len()])
+        } else {
+            format!(" next in {}", fmt_duration(w.remaining.max(0)))
+        };
+        spans.push(Span::styled(
+            format!("  ⟳ every {}s ·{spin}", w.interval),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::styled(
+            "   esc back · r refresh · q quit".to_string(),
+            dim(),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn detail_summary_line(d: &WorkflowDetail) -> Line<'static> {
+    let total = d.runs.len();
+    let pass = d.runs.iter().filter(|r| matches!(r.dot, Dot::Pass)).count();
+    let fail = d.runs.iter().filter(|r| matches!(r.dot, Dot::Fail)).count();
+    let decided = pass + fail;
+    let rate = if decided > 0 { pass * 100 / decided } else { 0 };
+    let completed: Vec<i64> = d
+        .runs
+        .iter()
+        .filter(|r| r.duration_secs > 0)
+        .map(|r| r.duration_secs)
+        .collect();
+    let avg = if completed.is_empty() {
+        0
+    } else {
+        completed.iter().sum::<i64>() / completed.len() as i64
+    };
+    let slowest = completed.iter().copied().max().unwrap_or(0);
+
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{total} runs"), bold(Color::White)),
+        Span::styled("  ·  ".to_string(), dim()),
+        Span::styled(format!("{pass} pass"), Style::default().fg(Color::Green)),
+        Span::styled(" / ".to_string(), dim()),
+        Span::styled(format!("{fail} fail"), Style::default().fg(Color::Red)),
+        Span::styled(format!("  ·  {rate}% green"), dim()),
+        Span::styled(
+            format!(
+                "  ·  avg {}  ·  slowest {}",
+                fmt_duration(avg),
+                fmt_duration(slowest)
+            ),
+            dim(),
+        ),
+    ])
+}
+
+fn dot_color(d: Dot) -> Color {
+    match d {
+        Dot::Pass => Color::Green,
+        Dot::Fail => Color::Red,
+        Dot::Active => Color::Yellow,
+        Dot::Other => Color::DarkGray,
+    }
+}
+
+/// A per-column-colored block bar chart of run durations (baseline 0).
+fn duration_chart(runs: &[RunPoint]) -> Vec<Line<'static>> {
+    let pts: Vec<&RunPoint> = runs.iter().rev().take(CHART_W).rev().collect();
+    let n = pts.len();
+    let maxv = pts
+        .iter()
+        .map(|r| r.duration_secs)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let top_label = fmt_duration(maxv);
+    let label_w = top_label.chars().count().max(2);
+    let levels = (DETAIL_CHART_H * 8) as f64;
+    let filled: Vec<i64> = pts
+        .iter()
+        .map(|r| ((r.duration_secs as f64 / maxv as f64) * levels).round() as i64)
+        .collect();
+
+    let mut lines = Vec::new();
+    for r in 0..DETAIL_CHART_H {
+        let rfb = (DETAIL_CHART_H - 1 - r) as i64;
+        let ylab = if r == 0 {
+            format!("{top_label:>label_w$}")
+        } else if r == DETAIL_CHART_H - 1 {
+            format!("{:>label_w$}", "0")
+        } else {
+            " ".repeat(label_w)
+        };
+        let axis = if r == DETAIL_CHART_H - 1 {
+            '┼'
+        } else {
+            '┤'
+        };
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled(format!("{ylab} {axis}"), dim()),
+        ];
+        for (i, &fl) in filled.iter().enumerate() {
+            let e = fl - rfb * 8;
+            let ch = if e >= 8 {
+                '█'
+            } else if e <= 0 {
+                ' '
+            } else {
+                BLOCKS[e as usize]
+            };
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(dot_color(pts[i].dot)),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{} └{}", " ".repeat(label_w), "─".repeat(n)), dim()),
+    ]));
+    lines
+}
+
 fn sanitize(s: &str) -> String {
     s.replace(['—', '–'], "-")
 }
@@ -1040,6 +1239,46 @@ mod tests {
         assert!(txt.contains("3399"), "remaining shown");
         assert!(txt.contains("+7"), "used delta shown");
         assert!(txt.contains("costs no quota"), "free-endpoint footer shown");
+    }
+
+    #[test]
+    fn detail_view_renders() {
+        use crate::model::{RunPoint, WorkflowDetail};
+        let now = Utc::now();
+        let runs = vec![
+            RunPoint {
+                started: now - chrono::Duration::days(2),
+                duration_secs: 120,
+                dot: Dot::Pass,
+            },
+            RunPoint {
+                started: now - chrono::Duration::days(1),
+                duration_secs: 300,
+                dot: Dot::Fail,
+            },
+            RunPoint {
+                started: now,
+                duration_secs: 60,
+                dot: Dot::Pass,
+            },
+        ];
+        let detail = WorkflowDetail { days: 7, runs };
+        let f = DetailFrame {
+            repo: "owner/repo",
+            workflow: "CI",
+            detail: Some(&detail),
+            now: Local::now(),
+            watch: None,
+            spinner: 0,
+            loading: false,
+        };
+        let txt = lines_to_ansi(&build_detail_lines(&f));
+        assert!(txt.contains("CI"), "workflow name shown");
+        assert!(txt.contains("3 runs"), "run count shown");
+        assert!(txt.contains("2 pass"), "pass count shown");
+        assert!(txt.contains("1 fail"), "fail count shown");
+        let has_bar = "▁▂▃▄▅▆▇█".chars().any(|c| txt.contains(c));
+        assert!(has_bar, "duration chart renders bars");
     }
 
     #[test]

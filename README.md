@@ -30,6 +30,7 @@ Why it exists: checking a dozen repos' Actions tabs by hand is tedious, GitHub's
 - **Clickable commit** — the Commit column shows the latest run's head SHA (red when failing). In one-shot output it's an OSC-8 hyperlink to the commit on GitHub (⌘-click in iTerm2); in watch mode, press `o` to open the selected row's commit.
 - **ETA** — for in-progress runs, estimated time remaining based on the most recent successful run's duration (`~3m 10s`), turning red with `+overrun` once it runs long.
 - **Watch mode** — a live, alt-screen TUI that refreshes in the background with an animated spinner, a refresh countdown, row selection, and a 6h auto-exit.
+- **Workflow detail** (`Enter`) — drill into the selected workflow for a colored duration bar chart of its runs over the last 7 days (green/red by pass/fail), with a summary: run count, pass rate, average and slowest duration.
 - **Re-run from the TUI** — select a workflow with `↑`/`↓` and press `x` to re-run it (with a `y`/`n` confirm), via `gh api`. No browser round-trip.
 - **Stats view** (`t`) — per-repo Stars / Forks / Watchers / Issues / PRs with day-over-day deltas, plus a full-width unicode chart of the selected repo's star history. Snapshots are persisted to SQLite (`~/.config/actiontui/stats.db`) so the trend grows over time — far past GitHub's own 14-day traffic window. Launch straight into it with `--stats`.
 - **Rate-limit view** (`g`) — every GitHub API quota bucket (core, search, graphql, …) with used/remaining/limit, a per-refresh Δ, and when each resets. Fires a sound alert when the `core` bucket dips below 1000. The `rate_limit` endpoint is free, so polling it costs no quota. Launch straight into it with `--rate`.
@@ -84,7 +85,8 @@ Repos are resolved in this order:
 | `t`             | toggle the **Stats** view (CI ↔ stats)   |
 | `g`             | toggle the **Rate-limit** view (CI ↔ rate) |
 | `↑` / `↓` (`k`/`j`) | move the selection                   |
-| `x` / `Enter`   | re-run the selected workflow (`y`/`n` confirm) *(CI view)* |
+| `Enter`         | drill into the selected workflow's detail chart *(CI view)* |
+| `x`             | re-run the selected workflow (`y`/`n` confirm) *(CI view)* |
 | `o`             | open the selected row's commit in the browser *(CI view)* |
 | `T`             | fire a test notification + sound         |
 | `r` / `R`       | refresh now                              |

@@ -10,7 +10,9 @@ use octocrab::Octocrab;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
-use crate::model::{Badge, Dot, RateBucket, RepoResult, RepoStats, Snapshot, WorkflowRow};
+use crate::model::{
+    Badge, Dot, RateBucket, RepoResult, RepoStats, RunPoint, Snapshot, WorkflowDetail, WorkflowRow,
+};
 
 const RECENT_COUNT: usize = 6;
 const RUN_PAGE_SIZE: usize = 100;
@@ -139,7 +141,7 @@ async fn fetch_repo_inner(
     }
 
     let mut rows = Vec::with_capacity(groups.len());
-    for (_id, mut group) in groups {
+    for (workflow_id, mut group) in groups {
         // Newest first.
         group.sort_by_key(|r| std::cmp::Reverse(r.started()));
         let latest = &group[0];
@@ -150,6 +152,7 @@ async fn fetch_repo_inner(
 
         rows.push(WorkflowRow {
             workflow_name: latest.name.clone().unwrap_or_else(|| "unknown".into()),
+            workflow_id,
             badge: badge.clone(),
             started_at: Some(latest.started()),
             finished_at: (status == "completed").then_some(latest.updated_at),
@@ -232,6 +235,58 @@ async fn open_pr_count(octo: &Octocrab, repo: &str) -> Result<i64> {
     let route = format!("/repos/{repo}/pulls?state=open&per_page=100");
     let pulls: Vec<PullStub> = octo.get(&route, None::<&()>).await?;
     Ok(pulls.len() as i64)
+}
+
+/// Fetch a single workflow's run history over the last `days`, for the detail
+/// chart. Returns runs oldest → newest.
+pub async fn fetch_workflow_detail(
+    octo: &Octocrab,
+    repo: &str,
+    workflow_id: u64,
+    workflow: &str,
+    branch: &str,
+    days: u32,
+) -> Result<WorkflowDetail> {
+    let route = format!(
+        "/repos/{repo}/actions/workflows/{workflow_id}/runs?branch={branch}&per_page=100",
+        branch = urlencode(branch),
+    );
+    let resp: RunsResponse = octo
+        .get(&route, None::<&()>)
+        .await
+        .map_err(|e| Error::GitHub(format!("fetching runs for {workflow}: {e}")))?;
+
+    let cutoff = Utc::now() - chrono::Duration::days(i64::from(days));
+    let mut runs: Vec<RunPoint> = resp
+        .workflow_runs
+        .into_iter()
+        .filter_map(|r| {
+            let started = r.started();
+            if started < cutoff {
+                return None;
+            }
+            let status = r.status.as_deref().unwrap_or("");
+            let duration_secs = if status == "completed" {
+                (r.updated_at - started).num_seconds().max(0)
+            } else {
+                0
+            };
+            let dot = match (status, r.conclusion.as_deref()) {
+                ("completed", Some("success")) => Dot::Pass,
+                ("completed", Some("failure" | "timed_out")) => Dot::Fail,
+                ("in_progress" | "queued" | "pending", _) => Dot::Active,
+                _ => Dot::Other,
+            };
+            Some(RunPoint {
+                started,
+                duration_secs,
+                dot,
+            })
+        })
+        .collect();
+    runs.sort_by_key(|r| r.started);
+
+    Ok(WorkflowDetail { days, runs })
 }
 
 #[derive(Deserialize)]
