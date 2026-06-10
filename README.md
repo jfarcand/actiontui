@@ -40,13 +40,15 @@ Why it exists: checking a dozen repos' Actions tabs by hand is tedious, GitHub's
 
 ## Install
 
-Requires the [`gh`](https://cli.github.com) CLI authenticated (`gh auth login`) — actiontui pulls its token from `gh auth token`, or from `GH_TOKEN`/`GITHUB_TOKEN`.
-
 ```sh
+brew install jfarcand/tap/actiontui   # macOS / Linux (prebuilt binary)
+# or via cargo:
 cargo install actiontui
 # or from a checkout:
 cargo install --path .
 ```
+
+Requires the [`gh`](https://cli.github.com) CLI authenticated (`gh auth login`) — actiontui pulls its token from `gh auth token`, or from `GH_TOKEN`/`GITHUB_TOKEN`.
 
 ## Usage
 
