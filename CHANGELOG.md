@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3] — 2026-06-10
+
+- perf: ETag conditional requests (octocrab→reqwest) — 304s are free quota
+- perf: cache active-workflow-id lookups (~10m TTL) to halve CI API calls
+- feat: width-filling taller charts; r=rerun, +/- live refresh interval
+- feat: workflow detail view (Enter) — 7-day duration chart + summary
+- feat: add API rate-limit view (g key / --rate), mirroring ghrate
+
+
 ## [0.1.2] — 2026-06-06
 
 - chore: relicense under Apache-2.0 only (drop MIT)
